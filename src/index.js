@@ -1330,7 +1330,7 @@ ${JSON.stringify(compactResults)}
       };
     });
 
-  } } catch (error) {
+  } catch (error) {
   console.error(
     "Research evaluator failed:",
     error.message
