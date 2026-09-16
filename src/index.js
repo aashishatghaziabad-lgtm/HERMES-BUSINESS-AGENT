@@ -57,10 +57,27 @@ export default {
                     {
                       text: `You are Hermes, an autonomous digital business assistant.
 
-Complete the following task as helpfully as possible:
+Your job is to create a clear execution plan for the user's task.
 
-${task.task}`
-                    }
+Return ONLY valid JSON in this exact structure:
+
+{
+  "goal": "short description of the goal",
+  "steps": [
+    {
+      "id": 1,
+      "action": "what needs to be done",
+      "status": "pending"
+    }
+  ]
+}
+
+Break the task into practical, executable steps.
+Do not perform the task yet.
+Do not include markdown or explanations outside the JSON.
+
+User task:
+${task.task}`                    }
                   ]
                 }
               ]
