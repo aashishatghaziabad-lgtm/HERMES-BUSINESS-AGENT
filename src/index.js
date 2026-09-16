@@ -731,6 +731,13 @@ async function searchWeb(
     );
   }
 
+  const cleanQuery = query.trim();
+
+  if (!cleanQuery) {
+    throw new Error(
+      "Search query cannot be empty"
+    );
+  }
 
   const response = await fetch(
     "https://api.tavily.com/search",
@@ -746,27 +753,30 @@ async function searchWeb(
           env.TAVILY_API_KEY,
 
         query:
-          query.trim(),
+          cleanQuery,
 
         search_depth:
-          "basic",
+          "advanced",
 
         max_results:
-          5,
+          10,
 
         include_answer:
+          false,
+
+        include_raw_content:
+          false,
+
+        include_images:
           false
       })
     }
   );
 
-
   const result =
     await response.json();
 
-
   if (!response.ok) {
-
     throw new Error(
       result?.detail ||
       result?.error ||
@@ -774,16 +784,90 @@ async function searchWeb(
     );
   }
 
+  const rawResults =
+    Array.isArray(result.results)
+      ? result.results
+      : [];
+
+  /*
+   * Remove duplicate URLs.
+   */
+  const seenUrls =
+    new Set();
+
+  const uniqueResults =
+    rawResults.filter((item) => {
+
+      const url =
+        String(item?.url || "")
+          .trim();
+
+      if (!url) {
+        return false;
+      }
+
+      if (seenUrls.has(url)) {
+        return false;
+      }
+
+      seenUrls.add(url);
+
+      return true;
+    });
+
+
+  /*
+   * Add lightweight metadata so Hermes
+   * can understand the quality of each result.
+   */
+  const enrichedResults =
+    uniqueResults.map((item, index) => {
+
+      let domain = "";
+
+      try {
+        domain =
+          new URL(item.url).hostname
+            .replace(/^www\./, "");
+      } catch {
+        domain = "";
+      }
+
+      return {
+        rank:
+          index + 1,
+
+        title:
+          item.title || "",
+
+        url:
+          item.url,
+
+        domain:
+          domain,
+
+        content:
+          item.content || "",
+
+        score:
+          typeof item.score === "number"
+            ? item.score
+            : null
+      };
+    });
+
 
   return {
     query:
-      query.trim(),
+      cleanQuery,
+
+    result_count:
+      enrichedResults.length,
 
     results:
-      result.results || []
+      enrichedResults
   };
 }
-
 
 // ===========================================================
 // HERMES AGENT
