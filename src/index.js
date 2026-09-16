@@ -222,6 +222,136 @@ if (
     }
   );
 }
+    // Execute one pending step
+if (
+  request.method === "POST" &&
+  new URL(request.url).pathname === "/step"
+) {
+  const step = await env.DB.prepare(`
+    SELECT * FROM task_steps
+    WHERE status = 'pending'
+    ORDER BY task_id ASC, step_number ASC
+    LIMIT 1
+  `).first();
+
+  if (!step) {
+    return new Response(
+      JSON.stringify({
+        success: true,
+        message: "No pending steps 💤"
+      }),
+      {
+        headers: {
+          "content-type": "application/json"
+        }
+      }
+    );
+  }
+
+  // Mark step as running and record an attempt
+  await env.DB.prepare(`
+    UPDATE task_steps
+    SET status = 'running',
+        attempts = attempts + 1
+    WHERE id = ?
+  `)
+    .bind(step.id)
+    .run();
+
+  try {
+    const response = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": env.GEMINI_API_KEY
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: `You are Hermes executing one step of a larger task.
+
+Execute this step as helpfully as possible:
+
+${step.action}
+
+Return a concise result describing what you accomplished.
+`
+                }
+              ]
+            }
+          ]
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data?.error?.message || "Gemini API request failed"
+      );
+    }
+
+    const result =
+      data?.candidates?.[0]?.content?.parts
+        ?.map(part => part.text || "")
+        .join("") || "Gemini returned no text.";
+
+    await env.DB.prepare(`
+      UPDATE task_steps
+      SET status = 'completed',
+          result = ?
+      WHERE id = ?
+    `)
+      .bind(result, step.id)
+      .run();
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        step_id: step.id,
+        task_id: step.task_id,
+        status: "completed",
+        result
+      }),
+      {
+        headers: {
+          "content-type": "application/json"
+        }
+      }
+    );
+
+  } catch (error) {
+    await env.DB.prepare(`
+      UPDATE task_steps
+      SET status = 'failed',
+          result = ?
+      WHERE id = ?
+    `)
+      .bind(error.message, step.id)
+      .run();
+
+    return new Response(
+      JSON.stringify({
+        success: false,
+        step_id: step.id,
+        task_id: step.task_id,
+        status: "failed",
+        error: error.message
+      }),
+      {
+        status: 500,
+        headers: {
+          "content-type": "application/json"
+        }
+      }
+    );
+  }
+}
     // Show task steps
 if (
   request.method === "GET" &&
