@@ -320,33 +320,38 @@ Do not pretend that an action was performed if you only generated instructions.
           result
         });
 
-      } catch (error) {
-        const attempts = step.attempts + 1;
+      } } catch (error) {
+  const attempts = step.attempts + 1;
+  const nextStatus = attempts < 3 ? "pending" : "failed";
 
-        await env.DB.prepare(`
-          UPDATE task_steps
-          SET status = ?,
-              result = ?
-          WHERE id = ?
-        `)
-          .bind(
-            attempts < 3 ? "pending" : "failed",
-            error.message,
-            step.id
-          )
-          .run();
+  // Reset the step so it can retry later
+  await env.DB.prepare(`
+    UPDATE task_steps
+    SET status = ?,
+        result = ?
+    WHERE id = ?
+  `)
+    .bind(nextStatus, error.message, step.id)
+    .run();
 
-        return json({
-          success: false,
-          task_id: task.id,
-          step_id: step.id,
-          status: attempts < 3 ? "retrying" : "failed",
-          attempts,
-          error: error.message
-        }, 500);
-      }
-    }
+  // IMPORTANT: don't leave the whole task stuck in "running"
+  await env.DB.prepare(`
+    UPDATE tasks
+    SET status = ?
+    WHERE id = ?
+  `)
+    .bind(nextStatus === "pending" ? "planned" : "failed", task.id)
+    .run();
 
+  return json({
+    success: false,
+    task_id: task.id,
+    step_id: step.id,
+    status: nextStatus === "pending" ? "retrying" : "failed",
+    attempts,
+    error: error.message
+  }, 500);
+}
     // =========================================================
     // RUN ENTIRE TASK
     // POST /run-task?task_id=16
