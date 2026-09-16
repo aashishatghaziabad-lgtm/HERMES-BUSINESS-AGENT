@@ -110,10 +110,31 @@ ${task.task}`                    }
           data?.candidates?.[0]?.content?.parts
             ?.map(part => part.text || "")
             .join("") || "Gemini returned no text.";
+        const cleanResult = result
+  .replace(/^```json\s*/i, "")
+  .replace(/\s*```$/i, "")
+  .trim();
+
+const plan = JSON.parse(cleanResult);
+
+for (const step of plan.steps) {
+  await env.DB.prepare(`
+    INSERT INTO task_steps
+    (task_id, step_number, action, status)
+    VALUES (?, ?, ?, ?)
+  `)
+    .bind(
+      task.id,
+      step.id,
+      step.action,
+      step.status || "pending"
+    )
+    .run();
+}
 
         await env.DB.prepare(
           "UPDATE tasks SET status = 'completed', result = ? WHERE id = ?"
-        ).bind(result, task.id).run();
+        ).bind(cleanResult, task.id).run();
 
         return new Response(
           JSON.stringify({
