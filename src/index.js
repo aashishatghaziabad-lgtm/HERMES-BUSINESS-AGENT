@@ -587,7 +587,169 @@ if (
     }, 500);
   }
 }
+// =========================================================
+// AGENT WEB SEARCH LOOP
+// Hermes can decide when to use Tavily
+// =========================================================
 
+async function searchWeb(env, query) {
+  const response = await fetch(
+    "https://api.tavily.com/search",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        api_key: env.TAVILY_API_KEY,
+        query: query.trim(),
+        search_depth: "basic",
+        max_results: 5,
+        include_answer: false
+      })
+    }
+  );
+
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      result?.detail ||
+      result?.error ||
+      "Tavily search failed"
+    );
+  }
+
+  return {
+    query: query.trim(),
+    results: result.results || []
+  };
+}
+
+
+async function runAgent(env, task, stepAction) {
+
+  const maxToolCalls = 3;
+
+  let conversation = `
+You are Hermes, an autonomous business assistant.
+
+TASK:
+${task}
+
+CURRENT STEP:
+${stepAction}
+
+You have exactly ONE tool:
+
+WEB_SEARCH
+Use it when current, external, market, competitor, product, pricing,
+trend, or other web information is needed.
+
+IMPORTANT:
+The Worker will execute the tool for you.
+
+If you need web search, respond with ONLY this JSON:
+
+{"action":"search","query":"your search query"}
+
+If you already have enough information, respond with ONLY:
+
+{"action":"final","answer":"your answer"}
+
+Do not use markdown.
+Do not write <tool_call>.
+Do not invent search results.
+`;
+
+  for (let attempt = 0; attempt < maxToolCalls; attempt++) {
+
+    const ai = await callAI(env, conversation, false);
+
+    const text = (ai.text || "").trim();
+
+    let decision;
+
+    try {
+      decision = JSON.parse(cleanJson(text));
+    } catch (error) {
+
+      // If the model failed to follow the JSON protocol,
+      // treat its response as a final answer rather than
+      // executing arbitrary text as a tool.
+      return {
+        provider: ai.provider,
+        answer: text,
+        tool_calls: attempt
+      };
+    }
+
+
+    // =====================================================
+    // SEARCH REQUEST
+    // =====================================================
+
+    if (
+      decision.action === "search" &&
+      typeof decision.query === "string" &&
+      decision.query.trim()
+    ) {
+
+      const searchResult = await searchWeb(
+        env,
+        decision.query
+      );
+
+      conversation += `
+
+WEB_SEARCH RESULT:
+
+${JSON.stringify(searchResult)}
+
+Now continue the task.
+
+If another search is genuinely necessary, request it.
+Otherwise return the final answer using:
+
+{"action":"final","answer":"your answer"}
+`;
+
+      continue;
+    }
+
+
+    // =====================================================
+    // FINAL ANSWER
+    // =====================================================
+
+    if (
+      decision.action === "final" &&
+      typeof decision.answer === "string"
+    ) {
+
+      return {
+        provider: ai.provider,
+        answer: decision.answer,
+        tool_calls: attempt
+      };
+    }
+
+
+    // Unknown response format
+    return {
+      provider: ai.provider,
+      answer: text,
+      tool_calls: attempt
+    };
+  }
+
+
+  return {
+    provider: "agent",
+    answer: "The agent reached the maximum number of web searches.",
+    tool_calls: maxToolCalls
+  };
+}
     // =========================================================
     // VIEW TASK STEPS
     // GET /steps?task_id=18
