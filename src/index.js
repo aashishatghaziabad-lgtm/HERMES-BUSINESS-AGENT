@@ -755,6 +755,19 @@ Return JSON only.
         env,
         decision.query
       );
+      const sources = (searchResult.results || []).map(
+  result => ({
+    title: result.title || "",
+    url: result.url || "",
+    content: result.content || ""
+  })
+);
+      conversation += `
+
+SOURCE EVIDENCE:
+
+${JSON.stringify(sources)}
+`;
 
       conversation += `
 
