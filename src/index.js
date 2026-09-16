@@ -30,7 +30,44 @@ export default {
     FOREIGN KEY (task_id) REFERENCES tasks(id)
   )
 `).run();
+// Create a new task
+if (
+  request.method === "POST" &&
+  new URL(request.url).pathname === "/task"
+) {
+  const data = await request.json();
 
+  if (!data.task || typeof data.task !== "string") {
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: "Task is required"
+      }),
+      {
+        status: 400,
+        headers: { "content-type": "application/json" }
+      }
+    );
+  }
+
+  const result = await env.DB.prepare(
+    "INSERT INTO tasks (task, status) VALUES (?, ?)"
+  )
+    .bind(data.task.trim(), "pending")
+    .run();
+
+  return new Response(
+    JSON.stringify({
+      success: true,
+      task_id: result.meta.last_row_id,
+      status: "pending",
+      message: "Task added to Hermes 🧠"
+    }),
+    {
+      headers: { "content-type": "application/json" }
+    }
+  );
+}
     // Run one pending task
     if (
       request.method === "POST" &&
