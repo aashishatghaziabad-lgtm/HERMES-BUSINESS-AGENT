@@ -1702,18 +1702,20 @@ async function callOpenRouter(
   }
 
 
-  const text =
-    data?.choices?.[0]?.message?.content ||
-    "";
+  const message =
+  data?.choices?.[0]?.message || {};
 
+const text =
+  typeof message.content === "string"
+    ? message.content.trim()
+    : "";
 
-  if (!text) {
-
-    throw new Error(
-      "OpenRouter returned no text"
-    );
-  }
-
+if (!text) {
+  throw new Error(
+    `OpenRouter returned no usable text. ` +
+    `Response: ${JSON.stringify(data).slice(0, 2000)}`
+  );
+}
 
   return {
     text,
