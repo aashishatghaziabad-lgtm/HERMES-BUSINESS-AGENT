@@ -931,7 +931,7 @@ async function searchWeb(
    * Add lightweight metadata so Hermes
    * can understand the quality of each result.
    */
-  const enrichedResults =
+ const enrichedResults =
     uniqueResults.map((item, index) => {
 
       let domain = "";
@@ -963,23 +963,25 @@ async function searchWeb(
         score:
           typeof item.score === "number"
             ? item.score
-            : null
+            : null,
+
+        quality_score:
+          scoreSourceQuality(
+            item,
+            cleanQuery
+          )
       };
     });
+  enrichedResults.sort(
+  (a, b) =>
+    b.quality_score - a.quality_score
+);
 
-
-  return {
-    query:
-      cleanQuery,
-
-    result_count:
-      enrichedResults.length,
-
-    results:
-      enrichedResults
-  };
-}
-
+enrichedResults.forEach(
+  (item, index) => {
+    item.rank = index + 1;
+  }
+);
 // ===========================================================
 // HERMES AGENT
 // ===========================================================
