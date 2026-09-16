@@ -1355,14 +1355,12 @@ const evaluatedResults =
       const relevantResults = evaluatedResults.filter(
   result => result.relevant === true
 );
-      const newSources = relevantResults.map
-        .map(result => ({
-          title: result.title || "",
-          url: result.url || "",
-          content: result.content || ""
-        }))
-        .filter(source => source.url);
-
+      const newSources = relevantResults.map(result => ({
+  title: result.title || "",
+  url: result.url || "",
+  content: result.content || ""
+})).filter(source => source.url);
+      
       for (const source of newSources) {
 
         const exists = collectedSources.some(
