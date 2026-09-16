@@ -1040,142 +1040,323 @@ const uniqueResults =
 }// ===========================================================
 // HERMES AGENT
 // ===========================================================
-async function evaluateSearchResults(
-  env,
-  researchQuestion,
-  results
-) {
-
-  if (
-    !Array.isArray(results) ||
-    results.length === 0
-  ) {
+async function evaluateSearchResults(env, researchQuestion, results) {
+  if (!Array.isArray(results) || results.length === 0) {
     return [];
   }
 
-  const compactResults =
-    results.map((result, index) => ({
-      id: index + 1,
-      title: result.title || "",
-      domain: result.domain || "",
-      url: result.url || "",
-      content: result.content || ""
-    }));
-
+  const compactResults = results.map((result, index) => ({
+    id: index,
+    title: result.title || "",
+    url: result.url || "",
+    domain: result.domain || "",
+    content: String(result.content || "").slice(0, 3500),
+  }));
 
   const prompt = `
-You are the research-quality evaluator for Hermes.
+You are the Research Evidence Evaluator for Hermes Business Agent.
+
+Your job is NOT to summarize the research.
+
+Your job is to inspect each web source and classify its research value.
 
 RESEARCH QUESTION:
 ${researchQuestion}
 
-Below are web search results.
+For EVERY source, evaluate:
 
-Your job is to identify which results contain useful evidence
-for answering the research question.
+1. relevant
+   - true if the source directly helps answer the research question.
+   - false if it is mostly unrelated.
 
-IMPORTANT:
-- Judge relevance to the research question.
-- Do not reward a source merely because it is famous.
-- A Reddit discussion can be useful evidence.
-- A generic guide can be useful background but may not be evidence.
-- A subreddit homepage is usually not useful evidence.
-- A YouTube video is not automatically bad, but only keep it if
-  the supplied content contains useful evidence.
-- Do not invent information.
-- Do not evaluate claims that are not present in the supplied content.
-- Do not treat duplicate/reposted content as independent evidence.
+2. relevance_score
+   - integer from 0 to 100.
 
-Return ONLY valid JSON.
+3. source_quality
+   - integer from 0 to 100.
+   - Consider:
+     * official/primary source
+     * established publication
+     * credible industry research
+     * community discussion
+     * unknown/low-quality source
 
-Required structure:
+4. evidence_strength
+   - "high", "medium", or "low"
+
+5. recency
+   - "recent", "older", or "unknown"
+   - Only call something recent if the source provides enough date/context to justify it.
+
+6. source_type
+   Choose ONE:
+   - official
+   - government
+   - research
+   - established_media
+   - industry
+   - community
+   - company
+   - blog
+   - unknown
+
+7. india_relevance
+   - integer from 0 to 100.
+   - How directly does this evidence apply to Indian Amazon sellers?
+
+8. evidence
+   - Give 1 to 3 short factual evidence points actually supported by the source.
+   - Do NOT invent information.
+
+9. claims
+   - List the major claims supported by this source.
+   - Keep each claim short.
+
+10. duplicate_group
+   - Assign the same group number when multiple sources appear to report substantially the same underlying information.
+   - Use 0 if the source appears independent.
+
+11. contradiction
+   - true only when the source appears to contradict another source or commonly reported evidence in the supplied results.
+   - Otherwise false.
+
+12. reason
+   - Briefly explain the evaluation.
+
+IMPORTANT RULES:
+- Do not reward a source merely because it agrees with other sources.
+- Repetition is NOT independent confirmation.
+- Official and primary sources generally deserve higher source_quality.
+- Community discussions can provide useful evidence of real user pain but should not automatically be treated as authoritative facts.
+- Company marketing pages can explain product capabilities but should not automatically be treated as independent evidence.
+- Do not invent publication dates.
+- Do not infer India relevance merely because Amazon is mentioned.
+- Distinguish firsthand reports from factual/authoritative evidence.
+- Return ONLY valid JSON.
+- Return one evaluation object for EVERY input source.
+
+Required JSON format:
 
 {
   "results": [
     {
-      "id": 1,
+      "id": 0,
       "relevant": true,
-      "evidence_strength": "high",
-      "reason": "short reason"
+      "relevance_score": 90,
+      "source_quality": 75,
+      "evidence_strength": "medium",
+      "recency": "recent",
+      "source_type": "community",
+      "india_relevance": 85,
+      "evidence": [
+        "Short evidence point"
+      ],
+      "claims": [
+        "Short supported claim"
+      ],
+      "duplicate_group": 0,
+      "contradiction": false,
+      "reason": "Brief explanation"
     }
   ]
 }
 
-Use exactly one of:
-"high"
-"medium"
-"low"
-
-SEARCH RESULTS:
+SOURCES:
 ${JSON.stringify(compactResults)}
 `;
 
-
   try {
+    const aiResponse = await callAI(env, prompt);
 
-    const response =
-      await callAI(
-        env,
-        prompt,
-        false
-      );
-
-    const cleaned =
-      cleanJson(response.text);
-
-    const evaluation =
-      JSON.parse(cleaned);
-
+    const parsed = cleanJson(aiResponse);
 
     if (
-      !evaluation.results ||
-      !Array.isArray(
-        evaluation.results
-      )
+      !parsed ||
+      !Array.isArray(parsed.results)
     ) {
-      return results;
-    }
-
-
-    const decisions =
-      new Map(
-        evaluation.results.map(
-          item => [
-            Number(item.id),
-            item
-          ]
-        )
+      console.warn(
+        "Research evaluator returned invalid JSON structure."
       );
 
+      return results.map(result => ({
+        ...result,
+        relevant: true,
+        relevance_score: 50,
+        source_quality: result.quality_score || 50,
+        evidence_strength: "low",
+        recency: "unknown",
+        source_type: "unknown",
+        india_relevance: 50,
+        evidence: [],
+        claims: [],
+        duplicate_group: 0,
+        contradiction: false,
+        relevance_reason:
+          "Evaluator returned an invalid response; original source retained."
+      }));
+    }
 
-   return results.map((result, index) => {
-  const decision = decisions.get(index + 1);
+    const decisions = new Map();
 
-  if (!decision) {
-    return {
-      ...result,
-      relevant: false,
-      evidence_strength: "low",
-      relevance_reason: "Evaluator did not return a decision."
-    };
-  }
+    for (const decision of parsed.results) {
+      if (
+        decision &&
+        Number.isInteger(decision.id)
+      ) {
+        decisions.set(decision.id, decision);
+      }
+    }
 
-  return {
-    ...result,
-    relevant: decision.relevant === true,
-    evidence_strength: decision.evidence_strength || "low",
-    relevance_reason: decision.reason || ""
-  };
-});
+    return results.map((result, index) => {
+      const decision = decisions.get(index);
+
+      if (!decision) {
+        return {
+          ...result,
+          relevant: false,
+          relevance_score: 0,
+          source_quality: result.quality_score || 0,
+          evidence_strength: "low",
+          recency: "unknown",
+          source_type: "unknown",
+          india_relevance: 0,
+          evidence: [],
+          claims: [],
+          duplicate_group: 0,
+          contradiction: false,
+          relevance_reason:
+            "Evaluator did not return a decision for this source."
+        };
+      }
+
+      return {
+        ...result,
+
+        relevant:
+          decision.relevant === true,
+
+        relevance_score:
+          Number.isFinite(
+            Number(decision.relevance_score)
+          )
+            ? Math.max(
+                0,
+                Math.min(
+                  100,
+                  Number(decision.relevance_score)
+                )
+              )
+            : 0,
+
+        source_quality:
+          Number.isFinite(
+            Number(decision.source_quality)
+          )
+            ? Math.max(
+                0,
+                Math.min(
+                  100,
+                  Number(decision.source_quality)
+                )
+              )
+            : (result.quality_score || 0),
+
+        evidence_strength:
+          ["high", "medium", "low"].includes(
+            decision.evidence_strength
+          )
+            ? decision.evidence_strength
+            : "low",
+
+        recency:
+          ["recent", "older", "unknown"].includes(
+            decision.recency
+          )
+            ? decision.recency
+            : "unknown",
+
+        source_type:
+          typeof decision.source_type === "string"
+            ? decision.source_type
+            : "unknown",
+
+        india_relevance:
+          Number.isFinite(
+            Number(decision.india_relevance)
+          )
+            ? Math.max(
+                0,
+                Math.min(
+                  100,
+                  Number(decision.india_relevance)
+                )
+              )
+            : 0,
+
+        evidence:
+          Array.isArray(decision.evidence)
+            ? decision.evidence
+                .filter(
+                  item =>
+                    typeof item === "string"
+                )
+                .slice(0, 3)
+            : [],
+
+        claims:
+          Array.isArray(decision.claims)
+            ? decision.claims
+                .filter(
+                  item =>
+                    typeof item === "string"
+                )
+                .slice(0, 10)
+            : [],
+
+        duplicate_group:
+          Number.isInteger(
+            decision.duplicate_group
+          )
+            ? decision.duplicate_group
+            : 0,
+
+        contradiction:
+          decision.contradiction === true,
+
+        relevance_reason:
+          typeof decision.reason === "string"
+            ? decision.reason
+            : ""
+      };
+    });
 
   } catch (error) {
+    console.error(
+      "Research evaluator failed:",
+      error.message
+    );
 
-    /*
-     * Fail open:
-     * If the evaluator fails, Hermes still
-     * receives the original search results.
-     */
-    return results;
+    // Fail-open:
+    // Keep the original search results usable even if
+    // the secondary evaluation model fails.
+    return results.map(result => ({
+      ...result,
+      relevant: true,
+      relevance_score:
+        result.quality_score || 50,
+      source_quality:
+        result.quality_score || 50,
+      evidence_strength: "low",
+      recency: "unknown",
+      source_type: "unknown",
+      india_relevance: 50,
+      evidence: [],
+      claims: [],
+      duplicate_group: 0,
+      contradiction: false,
+      relevance_reason:
+        "Research evaluator unavailable; original search result retained."
+    }));
   }
 }
 async function runAgent(env, task, stepAction) {
