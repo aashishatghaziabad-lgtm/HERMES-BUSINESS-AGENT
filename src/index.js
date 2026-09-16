@@ -1356,8 +1356,13 @@ Do not claim that the failed search produced results.
       }
 
       const results = searchResult?.results || [];
-
-      const newSources = results
+const evaluatedResults =
+  await evaluateSearchResults(
+    env,
+    `${task}\n${stepAction}`,
+    results
+  );
+      const newSources = evaluatedResults
         .map(result => ({
           title: result.title || "",
           url: result.url || "",
@@ -1387,10 +1392,10 @@ SEARCH QUERY:
 ${decision.query}
 
 RESULT COUNT:
-${results.length}
+${evaluatedResults.length}
 
 RESULTS:
-${JSON.stringify(results)}
+${JSON.stringify(evaluatedResults)}
 
 SOURCE EVIDENCE:
 ${JSON.stringify(newSources)}
