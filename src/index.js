@@ -632,7 +632,9 @@ async function runAgent(env, task, stepAction) {
   const maxToolCalls = 3;
 
   let conversation = `
-You are Hermes, an autonomous business assistant.
+You are Hermes, an autonomous business research assistant.
+
+You MUST follow the protocol below.
 
 TASK:
 ${task}
@@ -640,33 +642,52 @@ ${task}
 CURRENT STEP:
 ${stepAction}
 
-You have exactly ONE tool:
+AVAILABLE TOOL:
 
 WEB_SEARCH
-Use it when current, external, market, competitor, product, pricing,
-trend, or other web information is needed.
+This tool searches the live web.
 
-IMPORTANT:
-The Worker will execute the tool for you.
+WHEN TO SEARCH:
+If the current step requires current, external, market, competitor,
+pricing, trend, product, or other web information, you MUST request
+a web search before producing the final answer.
 
-If you need web search, respond with ONLY this JSON:
+TO REQUEST A SEARCH:
+Return ONLY this exact JSON format:
 
-{"action":"search","query":"your search query"}
+{"action":"search","query":"SEARCH QUERY HERE"}
 
-If you already have enough information, respond with ONLY:
+AFTER SEARCH RESULTS:
+You will receive real search results from the Worker.
 
-{"action":"final","answer":"your answer"}
+Then analyze those results.
 
-Do not use markdown.
-Do not write <tool_call>.
-Do not invent search results.
+WHEN FINISHED:
+Return ONLY this exact JSON format:
+
+{"action":"final","answer":"YOUR FINAL ANSWER HERE"}
+
+STRICT RULES:
+- Never output <tool_call>
+- Never output "User Safety"
+- Never classify the user's request as safe/unsafe
+- Never pretend that you searched the web
+- Never invent search results
+- Do not use markdown
+- Return JSON only
 `;
 
   for (let attempt = 0; attempt < maxToolCalls; attempt++) {
 
-    const ai = await callAI(env, conversation, false);
+    const ai = await callAI(
+      env,
+      conversation,
+      false
+    );
 
     const text = (ai.text || "").trim();
+
+    console.log("HERMES AI RESPONSE:", text);
 
     let decision;
 
@@ -674,19 +695,17 @@ Do not invent search results.
       decision = JSON.parse(cleanJson(text));
     } catch (error) {
 
-      // If the model failed to follow the JSON protocol,
-      // treat its response as a final answer rather than
-      // executing arbitrary text as a tool.
       return {
         provider: ai.provider,
         answer: text,
-        tool_calls: attempt
+        tool_calls: attempt,
+        protocol_error: true
       };
     }
 
 
     // =====================================================
-    // SEARCH REQUEST
+    // WEB SEARCH REQUEST
     // =====================================================
 
     if (
@@ -702,16 +721,22 @@ Do not invent search results.
 
       conversation += `
 
-WEB_SEARCH RESULT:
+REAL WEB SEARCH RESULTS:
 
 ${JSON.stringify(searchResult)}
 
-Now continue the task.
+IMPORTANT:
+These are real results returned by the Worker.
 
-If another search is genuinely necessary, request it.
-Otherwise return the final answer using:
+Now analyze them.
 
-{"action":"final","answer":"your answer"}
+If additional web research is required, request another search:
+
+{"action":"search","query":"..."}
+
+Otherwise provide the completed answer:
+
+{"action":"final","answer":"..."}
 `;
 
       continue;
@@ -735,18 +760,22 @@ Otherwise return the final answer using:
     }
 
 
-    // Unknown response format
+    // =====================================================
+    // INVALID PROTOCOL
+    // =====================================================
+
     return {
       provider: ai.provider,
       answer: text,
-      tool_calls: attempt
+      tool_calls: attempt,
+      protocol_error: true
     };
   }
 
 
   return {
     provider: "agent",
-    answer: "The agent reached the maximum number of web searches.",
+    answer: "Maximum web-search limit reached.",
     tool_calls: maxToolCalls
   };
 }
