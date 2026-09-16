@@ -1172,33 +1172,69 @@ function cleanJson(text) {
 
   let cleaned = text.trim();
 
+  // Remove markdown code fences
   cleaned = cleaned
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
     .replace(/\s*```$/i, "")
     .trim();
 
+  // Find the first JSON object
+  const firstBrace = cleaned.indexOf("{");
 
-  // Sometimes a model puts explanatory text before JSON.
-  // Try to extract the outermost JSON object.
-
-  const firstBrace =
-    cleaned.indexOf("{");
-
-  const lastBrace =
-    cleaned.lastIndexOf("}");
-
-  if (
-    firstBrace !== -1 &&
-    lastBrace !== -1 &&
-    lastBrace > firstBrace
-  ) {
-    cleaned =
-      cleaned.substring(
-        firstBrace,
-        lastBrace + 1
-      );
+  if (firstBrace === -1) {
+    return cleaned;
   }
 
-  return cleaned.trim();
+  // Find the matching closing brace.
+  // This prevents extra model text after the JSON
+  // from breaking JSON.parse().
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (
+    let i = firstBrace;
+    i < cleaned.length;
+    i++
+  ) {
+
+    const char = cleaned[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (char === "{") {
+      depth++;
+    }
+
+    if (char === "}") {
+      depth--;
+
+      if (depth === 0) {
+        return cleaned.substring(
+          firstBrace,
+          i + 1
+        ).trim();
+      }
+    }
+  }
+
+  return cleaned.substring(firstBrace).trim();
 }
