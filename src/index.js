@@ -1040,7 +1040,154 @@ const uniqueResults =
 }// ===========================================================
 // HERMES AGENT
 // ===========================================================
+async function evaluateSearchResults(
+  env,
+  researchQuestion,
+  results
+) {
 
+  if (
+    !Array.isArray(results) ||
+    results.length === 0
+  ) {
+    return [];
+  }
+
+  const compactResults =
+    results.map((result, index) => ({
+      id: index + 1,
+      title: result.title || "",
+      domain: result.domain || "",
+      url: result.url || "",
+      content: result.content || ""
+    }));
+
+
+  const prompt = `
+You are the research-quality evaluator for Hermes.
+
+RESEARCH QUESTION:
+${researchQuestion}
+
+Below are web search results.
+
+Your job is to identify which results contain useful evidence
+for answering the research question.
+
+IMPORTANT:
+- Judge relevance to the research question.
+- Do not reward a source merely because it is famous.
+- A Reddit discussion can be useful evidence.
+- A generic guide can be useful background but may not be evidence.
+- A subreddit homepage is usually not useful evidence.
+- A YouTube video is not automatically bad, but only keep it if
+  the supplied content contains useful evidence.
+- Do not invent information.
+- Do not evaluate claims that are not present in the supplied content.
+- Do not treat duplicate/reposted content as independent evidence.
+
+Return ONLY valid JSON.
+
+Required structure:
+
+{
+  "results": [
+    {
+      "id": 1,
+      "relevant": true,
+      "evidence_strength": "high",
+      "reason": "short reason"
+    }
+  ]
+}
+
+Use exactly one of:
+"high"
+"medium"
+"low"
+
+SEARCH RESULTS:
+${JSON.stringify(compactResults)}
+`;
+
+
+  try {
+
+    const response =
+      await callAI(
+        env,
+        prompt,
+        false
+      );
+
+    const cleaned =
+      cleanJson(response.text);
+
+    const evaluation =
+      JSON.parse(cleaned);
+
+
+    if (
+      !evaluation.results ||
+      !Array.isArray(
+        evaluation.results
+      )
+    ) {
+      return results;
+    }
+
+
+    const decisions =
+      new Map(
+        evaluation.results.map(
+          item => [
+            Number(item.id),
+            item
+          ]
+        )
+      );
+
+
+    return results
+      .map((result, index) => {
+
+        const decision =
+          decisions.get(index + 1);
+
+        if (!decision) {
+          return null;
+        }
+
+        return {
+          ...result,
+
+          relevant:
+            decision.relevant === true,
+
+          evidence_strength:
+            decision.evidence_strength ||
+            "low",
+
+          relevance_reason:
+            decision.reason || ""
+        };
+      })
+      .filter(Boolean)
+      .filter(
+        result =>
+          result.relevant === true
+      );
+
+  } catch (error) {
+
+    /*
+     * Fail open:
+     * If the evaluator fails, Hermes still
+     * receives the original search results.
+     */
+    return results;
+  }
+}
 async function runAgent(env, task, stepAction) {
 
   const maxToolCalls = 3;
