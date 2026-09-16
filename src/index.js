@@ -1355,7 +1355,7 @@ ${JSON.stringify(compactResults)}
       `Research evaluator unavailable: ${error.message}`
   }));
 }
-
+}
 async function runAgent(env, task, stepAction) {
 
   const maxToolCalls = 3;
