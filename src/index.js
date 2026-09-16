@@ -901,28 +901,69 @@ async function searchWeb(
       : [];
 
   const seenUrls =
-    new Set();
+  new Set();
 
-  const uniqueResults =
-    rawResults.filter((item) => {
+const seenEvidence =
+  new Set();
 
-      const url =
-        String(item?.url || "")
-          .trim();
+const uniqueResults =
+  rawResults.filter((item) => {
 
-      if (!url) {
-        return false;
-      }
+    const url =
+      String(item?.url || "")
+        .trim();
 
-      if (seenUrls.has(url)) {
-        return false;
-      }
+    const title =
+      String(item?.title || "")
+        .trim()
+        .toLowerCase();
 
-      seenUrls.add(url);
+    const content =
+      String(item?.content || "")
+        .trim()
+        .toLowerCase();
 
-      return true;
-    });
+    if (!url) {
+      return false;
+    }
 
+
+    // Exact URL duplicate
+    if (seenUrls.has(url)) {
+      return false;
+    }
+
+    seenUrls.add(url);
+
+
+    /*
+     * Detect the same evidence appearing
+     * on different URLs/subreddits.
+     *
+     * We normalize the title and content
+     * so small formatting differences don't
+     * create fake independent sources.
+     */
+    const evidenceKey =
+      `${title}|${content}`
+        .replace(/\s+/g, " ")
+        .trim();
+
+
+    if (
+      evidenceKey &&
+      seenEvidence.has(evidenceKey)
+    ) {
+      return false;
+    }
+
+    if (evidenceKey) {
+      seenEvidence.add(evidenceKey);
+    }
+
+
+    return true;
+  });
   const enrichedResults =
     uniqueResults.map((item, index) => {
 
