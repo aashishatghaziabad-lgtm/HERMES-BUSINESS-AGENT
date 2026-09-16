@@ -789,18 +789,12 @@ async function searchWeb(
 // HERMES AGENT
 // ===========================================================
 
-async function runAgent(
-  env,
-  task,
-  stepAction
-) {
+async function runAgent(env, task, stepAction) {
 
   const maxToolCalls = 3;
 
   let collectedSources = [];
-
   let totalToolCalls = 0;
-
 
   let conversation = `
 You are Hermes, an autonomous business research assistant.
@@ -848,79 +842,46 @@ STRICT RULES
 - Never invent search results.
 - Never pretend an external action occurred.
 - Use the search results supplied by the Worker.
-- Base factual claims on the supplied search evidence whenever possible.
+- Base factual claims on supplied search evidence whenever possible.
 `;
 
+  for (let attempt = 0; attempt < maxToolCalls + 2; attempt++) {
 
-  for (
-    let attempt = 0;
-    attempt < maxToolCalls;
-    attempt++
-  ) {
+    const ai = await callAI(
+      env,
+      conversation,
+      false
+    );
 
-    const ai =
-      await callAI(
-        env,
-        conversation,
-        false
-      );
-
-
-    const text =
-      (ai.text || "").trim();
-
+    const text = (ai.text || "").trim();
 
     let decision;
 
-
     try {
 
-      decision =
-        JSON.parse(
-          cleanJson(text)
-        );
+      decision = JSON.parse(
+        cleanJson(text)
+      );
 
     } catch (error) {
 
-      if (
-        attempt <
-        maxToolCalls - 1
-      ) {
+      conversation += `
 
-        conversation += `
+Your previous response was invalid.
 
-Your previous response was not valid JSON.
+Return ONLY valid JSON.
 
-Return ONLY one of these:
-
+If web research is required:
 {"action":"search","query":"..."}
 
-OR
-
+If enough information is available:
 {"action":"final","answer":"..."}
 
-JSON only.
+JSON ONLY.
 `;
 
-        continue;
-      }
-
-
-      return {
-        success: false,
-        provider:
-          ai.provider,
-        answer:
-          text,
-        tool_calls:
-          totalToolCalls,
-        sources:
-          collectedSources,
-        protocol_error:
-          true
-      };
+      continue;
     }
-
 
     // ========================================================
     // SEARCH REQUEST
@@ -932,56 +893,90 @@ JSON only.
       decision.query.trim()
     ) {
 
+      if (totalToolCalls >= maxToolCalls) {
+
+        conversation += `
+
+You have reached the maximum number of web searches.
+
+Use the evidence already provided and produce the final answer now.
+
+Return ONLY:
+
+{"action":"final","answer":"..."}
+`;
+
+        continue;
+      }
+
       totalToolCalls++;
 
+      let searchResult;
 
-      const searchResult =
-        await searchWeb(
+      try {
+
+        searchResult = await searchWeb(
           env,
           decision.query
         );
 
+      } catch (searchError) {
 
-      const newSources =
-        (searchResult.results || [])
-          .map(result => ({
-            title:
-              result.title || "",
+        conversation += `
 
-            url:
-              result.url || "",
+============================================================
+WEB SEARCH ERROR
+============================================================
 
-            content:
-              result.content || ""
-          }))
-          .filter(
-            source =>
-              source.url
-          );
+The Worker attempted this search:
 
+${decision.query}
 
-      // ------------------------------------------------------
-      // Deduplicate sources
-      // ------------------------------------------------------
+But the search tool returned an error:
 
-      for (
-        const source of newSources
-      ) {
+${searchError.message}
 
-        const exists =
-          collectedSources.some(
-            existing =>
-              existing.url === source.url
-          );
+The search was NOT successful.
 
+You may:
+1. Try a different search query, OR
+2. Use previously supplied evidence and produce the final answer.
 
-        if (!exists) {
-          collectedSources.push(
-            source
-          );
-        }
+Return ONLY:
+
+{"action":"search","query":"..."}
+
+OR:
+
+{"action":"final","answer":"..."}
+
+Do not claim that the failed search produced results.
+`;
+
+        continue;
       }
 
+      const results = searchResult?.results || [];
+
+      const newSources = results
+        .map(result => ({
+          title: result.title || "",
+          url: result.url || "",
+          content: result.content || ""
+        }))
+        .filter(source => source.url);
+
+      for (const source of newSources) {
+
+        const exists = collectedSources.some(
+          existing =>
+            existing.url === source.url
+        );
+
+        if (!exists) {
+          collectedSources.push(source);
+        }
+      }
 
       conversation += `
 
@@ -992,14 +987,13 @@ REAL WEB SEARCH RESULTS
 SEARCH QUERY:
 ${decision.query}
 
+RESULT COUNT:
+${results.length}
+
 RESULTS:
+${JSON.stringify(results)}
 
-${JSON.stringify(searchResult.results)}
-
-============================================================
-SOURCE EVIDENCE
-============================================================
-
+SOURCE EVIDENCE:
 ${JSON.stringify(newSources)}
 
 ============================================================
@@ -1010,7 +1004,7 @@ Analyze them.
 
 Do not invent facts.
 
-If more research is genuinely required:
+If more research is genuinely required and searches remain available:
 
 {"action":"search","query":"..."}
 
@@ -1022,33 +1016,24 @@ Otherwise:
       continue;
     }
 
-
     // ========================================================
     // FINAL ANSWER
     // ========================================================
 
     if (
       decision.action === "final" &&
-      typeof decision.answer === "string"
+      typeof decision.answer === "string" &&
+      decision.answer.trim()
     ) {
 
       return {
         success: true,
-
-        provider:
-          ai.provider,
-
-        answer:
-          decision.answer,
-
-        tool_calls:
-          totalToolCalls,
-
-        sources:
-          collectedSources
+        provider: ai.provider,
+        answer: decision.answer,
+        tool_calls: totalToolCalls,
+        sources: collectedSources
       };
     }
-
 
     // ========================================================
     // INVALID ACTION
@@ -1056,36 +1041,28 @@ Otherwise:
 
     conversation += `
 
-Invalid action.
+Your previous JSON used an invalid action.
 
-Return ONLY:
+Return ONLY one of:
 
 {"action":"search","query":"..."}
 
 OR:
 
 {"action":"final","answer":"..."}
+
+JSON ONLY.
 `;
   }
 
-
   return {
     success: false,
-
-    provider:
-      "agent",
-
-    answer:
-      "Maximum web-search limit reached.",
-
-    tool_calls:
-      totalToolCalls,
-
-    sources:
-      collectedSources
+    provider: "agent",
+    answer: "Hermes could not complete the agent loop within the allowed attempts.",
+    tool_calls: totalToolCalls,
+    sources: collectedSources
   };
 }
-
 
 // ===========================================================
 // AI ROUTER
