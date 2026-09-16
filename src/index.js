@@ -320,7 +320,7 @@ Do not pretend that an action was performed if you only generated instructions.
           result
         });
 
-      } } catch (error) {
+      }  catch (error) {
   const attempts = step.attempts + 1;
   const nextStatus = attempts < 3 ? "pending" : "failed";
 
