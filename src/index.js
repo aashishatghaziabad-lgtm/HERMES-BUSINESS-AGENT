@@ -17,13 +17,28 @@ export default {
     `).run();
 
     try {
-      await env.DB.prepare(
-        "ALTER TABLE tasks ADD COLUMN result TEXT"
-      ).run();
-    } catch (e) {
-      // Column already exists
-    }
+  await env.DB.prepare(
+    "ALTER TABLE tasks ADD COLUMN result TEXT"
+  ).run();
+} catch (e) {
+  // Column already exists
+}
 
+try {
+  await env.DB.prepare(
+    "ALTER TABLE task_steps ADD COLUMN sources TEXT"
+  ).run();
+} catch (e) {
+  // Column already exists
+}
+
+try {
+  await env.DB.prepare(
+    "ALTER TABLE task_steps ADD COLUMN tool_calls INTEGER DEFAULT 0"
+  ).run();
+} catch (e) {
+  // Column already exists
+}
     await env.DB.prepare(`
       CREATE TABLE IF NOT EXISTS task_steps (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
