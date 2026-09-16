@@ -9,19 +9,33 @@ export default {
       )
     `).run();
 
-    const result = await env.DB.prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'"
-    ).first();
+    if (request.method === "POST") {
+      const data = await request.json();
+
+      await env.DB.prepare(
+        "INSERT INTO tasks (task, status) VALUES (?, ?)"
+      ).bind(data.task, "pending").run();
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          message: "Task saved to Hermes memory 🧠"
+        }),
+        { headers: { "content-type": "application/json" } }
+      );
+    }
+
+    const tasks = await env.DB.prepare(
+      "SELECT * FROM tasks ORDER BY id DESC"
+    ).all();
 
     return new Response(
       JSON.stringify({
-        hermes: "alive",
-        memory: result ? "connected" : "error",
-        database: "hermes-memory"
+        hermes: "alive 🚀",
+        memory: "connected 🧠",
+        tasks: tasks.results
       }),
-      {
-        headers: { "content-type": "application/json" }
-      }
+      { headers: { "content-type": "application/json" } }
     );
   }
 };
