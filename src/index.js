@@ -1351,8 +1351,11 @@ const evaluatedResults =
     env,
     `${task}\n${stepAction}`,
     results
-  );
-      const newSources = evaluatedResults
+  ); 
+      const relevantResults = evaluatedResults.filter(
+  result => result.relevant === true
+);
+      const newSources = relevantResults.map
         .map(result => ({
           title: result.title || "",
           url: result.url || "",
@@ -1385,7 +1388,7 @@ RESULT COUNT:
 ${evaluatedResults.length}
 
 RESULTS:
-${JSON.stringify(evaluatedResults)}
+${JSON.stringify(relevantResults)}
 
 SOURCE EVIDENCE:
 ${JSON.stringify(newSources)}
