@@ -222,6 +222,31 @@ if (
     }
   );
 }
+    // Show task steps
+if (
+  request.method === "GET" &&
+  new URL(request.url).pathname === "/steps"
+) {
+  const taskId = new URL(request.url).searchParams.get("task_id");
+
+  const steps = await env.DB.prepare(
+    "SELECT * FROM task_steps WHERE task_id = ? ORDER BY step_number ASC"
+  )
+    .bind(taskId)
+    .all();
+
+  return new Response(
+    JSON.stringify({
+      task_id: taskId,
+      steps: steps.results
+    }),
+    {
+      headers: {
+        "content-type": "application/json"
+      }
+    }
+  );
+}
 
     // Show Hermes memory
     const tasks = await env.DB.prepare(
