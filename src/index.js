@@ -1148,35 +1148,25 @@ ${JSON.stringify(compactResults)}
       );
 
 
-    return results
-      .map((result, index) => {
+   return results.map((result, index) => {
+  const decision = decisions.get(index + 1);
 
-        const decision =
-          decisions.get(index + 1);
+  if (!decision) {
+    return {
+      ...result,
+      relevant: false,
+      evidence_strength: "low",
+      relevance_reason: "Evaluator did not return a decision."
+    };
+  }
 
-        if (!decision) {
-          return null;
-        }
-
-        return {
-          ...result,
-
-          relevant:
-            decision.relevant === true,
-
-          evidence_strength:
-            decision.evidence_strength ||
-            "low",
-
-          relevance_reason:
-            decision.reason || ""
-        };
-      })
-      .filter(Boolean)
-      .filter(
-        result =>
-          result.relevant === true
-      );
+  return {
+    ...result,
+    relevant: decision.relevant === true,
+    evidence_strength: decision.evidence_strength || "low",
+    relevance_reason: decision.reason || ""
+  };
+});
 
   } catch (error) {
 
