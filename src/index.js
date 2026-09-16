@@ -1330,34 +1330,31 @@ ${JSON.stringify(compactResults)}
       };
     });
 
-  } catch (error) {
-    console.error(
-      "Research evaluator failed:",
-      error.message
-    );
+  } } catch (error) {
+  console.error(
+    "Research evaluator failed:",
+    error.message
+  );
 
-    // Fail-open:
-    // Keep the original search results usable even if
-    // the secondary evaluation model fails.
-    return results.map(result => ({
-      ...result,
-      relevant: true,
-      relevance_score:
-        result.quality_score || 50,
-      source_quality:
-        result.quality_score || 50,
-      evidence_strength: "low",
-      recency: "unknown",
-      source_type: "unknown",
-      india_relevance: 50,
-      evidence: [],
-      claims: [],
-      duplicate_group: 0,
-      contradiction: false,
-      relevance_reason:
-        "Research evaluator unavailable; original search result retained."
-    }));
-  }
+  return results.map(result => ({
+    ...result,
+    relevant: true,
+    relevance_score:
+      result.quality_score || 50,
+    source_quality:
+      result.quality_score || 50,
+    evidence_strength: "low",
+    recency: "unknown",
+    source_type: "unknown",
+    india_relevance: 50,
+    evidence: [],
+    claims: [],
+    duplicate_group: 0,
+    contradiction: false,
+    relevance_reason:
+      `Research evaluator unavailable: ${error.message}`
+  }));
+}
 }
 async function runAgent(env, task, stepAction) {
 
