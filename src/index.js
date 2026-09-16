@@ -38,6 +38,7 @@ export default {
       )
     `).run();
 
+
     // =========================================================
     // CREATE TASK
     // POST /task
@@ -83,9 +84,10 @@ export default {
       });
     }
 
+
     // =========================================================
     // PLAN TASK
-    // POST /plan?task_id=18
+    // POST /plan?task_id=20
     // =========================================================
 
     if (
@@ -200,6 +202,7 @@ ${task.task}
         });
 
       } catch (error) {
+
         await env.DB.prepare(
           "UPDATE tasks SET status = 'failed', result = ? WHERE id = ?"
         )
@@ -215,9 +218,10 @@ ${task.task}
       }
     }
 
+
     // =========================================================
     // EXECUTE ONE STEP
-    // POST /step?task_id=18
+    // POST /step?task_id=20
     // =========================================================
 
     if (
@@ -264,120 +268,22 @@ ${task.task}
         });
       }
 
-      await env.DB.prepare(`
-        UPDATE task_steps
-        SET status = 'running',
-            attempts = attempts + 1
-        WHERE id = ?
-      `)
-        .bind(step.id)
-        .run();
+      const stepResponse = await executeStep(
+        env,
+        task,
+        step
+      );
 
-      await env.DB.prepare(
-        "UPDATE tasks SET status = 'running' WHERE id = ?"
-      )
-        .bind(task.id)
-        .run();
-
-      try {
-        const response = await callAI(
-          env,
-          `
-You are Hermes executing one step of an autonomous task.
-
-OVERALL TASK:
-${task.task}
-
-CURRENT STEP:
-${step.action}
-
-Execute the step as helpfully as possible.
-
-If web research is useful, use available web/search tools.
-
-Return a concise result containing:
-1. What you found or accomplished.
-2. Important evidence or facts.
-3. Sources when web research was used.
-
-Do not pretend that an action was performed if you only generated instructions.
-
-Clearly distinguish:
-- facts
-- analysis
-- things you could not verify
-          `,
-          true
-        );
-
-        await env.DB.prepare(`
-          UPDATE task_steps
-          SET status = 'completed',
-              result = ?
-          WHERE id = ?
-        `)
-          .bind(response.text, step.id)
-          .run();
-
-        return json({
-          success: true,
-          task_id: task.id,
-          step_id: step.id,
-          step_number: step.step_number,
-          status: "completed",
-          provider: response.provider,
-          result: response.text
-        });
-
-      } catch (error) {
-        const attempts = step.attempts + 1;
-        const nextStatus =
-          attempts < 3 ? "pending" : "failed";
-
-        await env.DB.prepare(`
-          UPDATE task_steps
-          SET status = ?,
-              result = ?
-          WHERE id = ?
-        `)
-          .bind(
-            nextStatus,
-            error.message,
-            step.id
-          )
-          .run();
-
-        await env.DB.prepare(`
-          UPDATE tasks
-          SET status = ?
-          WHERE id = ?
-        `)
-          .bind(
-            nextStatus === "pending"
-              ? "planned"
-              : "failed",
-            task.id
-          )
-          .run();
-
-        return json({
-          success: false,
-          task_id: task.id,
-          step_id: step.id,
-          step_number: step.step_number,
-          status:
-            nextStatus === "pending"
-              ? "retrying"
-              : "failed",
-          attempts,
-          error: error.message
-        }, 500);
-      }
+      return json({
+        ...stepResponse,
+        task_id: task.id
+      }, stepResponse.success ? 200 : 500);
     }
+
 
     // =========================================================
     // RUN TASK
-    // POST /run-task?task_id=18
+    // POST /run-task?task_id=20
     // =========================================================
 
     if (
@@ -415,7 +321,7 @@ Clearly distinguish:
         .bind(task.id)
         .all();
 
-      if (steps.results.length === 0) {
+      if (!steps.results || steps.results.length === 0) {
         return json({
           success: false,
           error: "Task has no planned steps"
@@ -482,10 +388,11 @@ Clearly distinguish:
         .first();
 
       if (Number(remaining.count) === 0) {
+
         await env.DB.prepare(
-          "UPDATE tasks SET status = 'completed' WHERE id = ?"
+          "UPDATE tasks SET status = 'completed', result = ? WHERE id = ?"
         )
-          .bind(task.id)
+          .bind(stepResponse.result || "", task.id)
           .run();
 
         return json({
@@ -512,276 +419,66 @@ Clearly distinguish:
         remaining_steps: Number(remaining.count)
       });
     }
+
+
     // =========================================================
-// WEB SEARCH TOOL
-// POST /search
-// =========================================================
+    // WEB SEARCH TOOL
+    // POST /search
+    // =========================================================
 
-if (
-  request.method === "POST" &&
-  url.pathname === "/search"
-) {
-  let data;
+    if (
+      request.method === "POST" &&
+      url.pathname === "/search"
+    ) {
+      let data;
 
-  try {
-    data = await request.json();
-  } catch (error) {
-    return json({
-      success: false,
-      error: "Invalid JSON body"
-    }, 400);
-  }
-
-  if (
-    !data.query ||
-    typeof data.query !== "string" ||
-    !data.query.trim()
-  ) {
-    return json({
-      success: false,
-      error: "Search query is required"
-    }, 400);
-  }
-
-  try {
-    const response = await fetch(
-      "https://api.tavily.com/search",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          api_key: env.TAVILY_API_KEY,
-          query: data.query.trim(),
-          search_depth: "basic",
-          max_results: 5,
-          include_answer: true
-        })
+      try {
+        data = await request.json();
+      } catch (error) {
+        return json({
+          success: false,
+          error: "Invalid JSON body"
+        }, 400);
       }
-    );
 
-    const result = await response.json();
+      if (
+        !data.query ||
+        typeof data.query !== "string" ||
+        !data.query.trim()
+      ) {
+        return json({
+          success: false,
+          error: "Search query is required"
+        }, 400);
+      }
 
-    if (!response.ok) {
-      throw new Error(
-        result?.detail ||
-        result?.error ||
-        "Tavily search failed"
-      );
-    }
+      try {
 
-    return json({
-      success: true,
-      tool: "web_search",
-      query: data.query.trim(),
-      answer: result.answer || null,
-      results: result.results || []
-    });
+        const result = await searchWeb(
+          env,
+          data.query
+        );
 
-  } catch (error) {
-    return json({
-      success: false,
-      tool: "web_search",
-      error: error.message
-    }, 500);
-  }
-}
-// =========================================================
-// AGENT WEB SEARCH LOOP
-// Hermes can decide when to use Tavily
-// =========================================================
+        return json({
+          success: true,
+          tool: "web_search",
+          ...result
+        });
 
-async function searchWeb(env, query) {
-  const response = await fetch(
-    "https://api.tavily.com/search",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        api_key: env.TAVILY_API_KEY,
-        query: query.trim(),
-        search_depth: "basic",
-        max_results: 5,
-        include_answer: false
-      })
-    }
-  );
+      } catch (error) {
 
-  const result = await response.json();
-
-  if (!response.ok) {
-    throw new Error(
-      result?.detail ||
-      result?.error ||
-      "Tavily search failed"
-    );
-  }
-
-  return {
-    query: query.trim(),
-    results: result.results || []
-  };
-}
-
-
-async function runAgent(env, task, stepAction) {
-
-  const maxToolCalls = 3;
-
-  let conversation = `
-You are Hermes, an autonomous business research assistant.
-
-You MUST follow the protocol below.
-
-TASK:
-${task}
-
-CURRENT STEP:
-${stepAction}
-
-AVAILABLE TOOL:
-
-WEB_SEARCH
-This tool searches the live web.
-
-WHEN TO SEARCH:
-If the current step requires current, external, market, competitor,
-pricing, trend, product, or other web information, you MUST request
-a web search before producing the final answer.
-
-TO REQUEST A SEARCH:
-Return ONLY this exact JSON format:
-
-{"action":"search","query":"SEARCH QUERY HERE"}
-
-AFTER SEARCH RESULTS:
-You will receive real search results from the Worker.
-
-Then analyze those results.
-
-WHEN FINISHED:
-Return ONLY this exact JSON format:
-
-{"action":"final","answer":"YOUR FINAL ANSWER HERE"}
-
-STRICT RULES:
-- Never output <tool_call>
-- Never output "User Safety"
-- Never classify the user's request as safe/unsafe
-- Never pretend that you searched the web
-- Never invent search results
-- Do not use markdown
-- Return JSON only
-`;
-
-  for (let attempt = 0; attempt < maxToolCalls; attempt++) {
-
-    const ai = await callAI(
-      env,
-      conversation,
-      false
-    );
-
-    const text = (ai.text || "").trim();
-
-    console.log("HERMES AI RESPONSE:", text);
-
-    let decision;
-
-    try {
-      decision = JSON.parse(cleanJson(text));
-    } catch (error) {
-
-      return {
-        provider: ai.provider,
-        answer: text,
-        tool_calls: attempt,
-        protocol_error: true
-      };
+        return json({
+          success: false,
+          tool: "web_search",
+          error: error.message
+        }, 500);
+      }
     }
 
 
-    // =====================================================
-    // WEB SEARCH REQUEST
-    // =====================================================
-
-    if (
-      decision.action === "search" &&
-      typeof decision.query === "string" &&
-      decision.query.trim()
-    ) {
-
-      const searchResult = await searchWeb(
-        env,
-        decision.query
-      );
-
-      conversation += `
-
-REAL WEB SEARCH RESULTS:
-
-${JSON.stringify(searchResult)}
-
-IMPORTANT:
-These are real results returned by the Worker.
-
-Now analyze them.
-
-If additional web research is required, request another search:
-
-{"action":"search","query":"..."}
-
-Otherwise provide the completed answer:
-
-{"action":"final","answer":"..."}
-`;
-
-      continue;
-    }
-
-
-    // =====================================================
-    // FINAL ANSWER
-    // =====================================================
-
-    if (
-      decision.action === "final" &&
-      typeof decision.answer === "string"
-    ) {
-
-      return {
-        provider: ai.provider,
-        answer: decision.answer,
-        tool_calls: attempt
-      };
-    }
-
-
-    // =====================================================
-    // INVALID PROTOCOL
-    // =====================================================
-
-    return {
-      provider: ai.provider,
-      answer: text,
-      tool_calls: attempt,
-      protocol_error: true
-    };
-  }
-
-
-  return {
-    provider: "agent",
-    answer: "Maximum web-search limit reached.",
-    tool_calls: maxToolCalls
-  };
-}
     // =========================================================
     // VIEW TASK STEPS
-    // GET /steps?task_id=18
+    // GET /steps?task_id=20
     // =========================================================
 
     if (
@@ -811,6 +508,7 @@ Otherwise provide the completed answer:
         steps: steps.results
       });
     }
+
 
     // =========================================================
     // SAFE TEST CLEANUP
@@ -845,6 +543,7 @@ Otherwise provide the completed answer:
       });
     }
 
+
     // =========================================================
     // DEFAULT MEMORY VIEW
     // =========================================================
@@ -865,6 +564,258 @@ Otherwise provide the completed answer:
 
 
 // ===========================================================
+// WEB SEARCH
+// ===========================================================
+
+async function searchWeb(env, query) {
+
+  if (!env.TAVILY_API_KEY) {
+    throw new Error(
+      "TAVILY_API_KEY is not configured"
+    );
+  }
+
+  const response = await fetch(
+    "https://api.tavily.com/search",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        api_key: env.TAVILY_API_KEY,
+        query: query.trim(),
+        search_depth: "basic",
+        max_results: 5,
+        include_answer: false
+      })
+    }
+  );
+
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      result?.detail ||
+      result?.error ||
+      "Tavily search failed"
+    );
+  }
+
+  return {
+    query: query.trim(),
+    results: result.results || []
+  };
+}
+
+
+// ===========================================================
+// HERMES AGENT
+// ===========================================================
+
+async function runAgent(
+  env,
+  task,
+  stepAction
+) {
+
+  const maxToolCalls = 3;
+
+  let conversation = `
+You are Hermes, an autonomous business research assistant.
+
+TASK:
+${task}
+
+CURRENT STEP:
+${stepAction}
+
+You have ONE external tool:
+
+WEB_SEARCH
+
+The Worker executes this tool.
+
+============================================================
+SEARCH PROTOCOL
+============================================================
+
+If current web information is needed, return ONLY:
+
+{"action":"search","query":"SEARCH QUERY"}
+
+Do NOT search by yourself.
+
+Do NOT claim you searched unless the Worker supplied search results.
+
+============================================================
+FINAL PROTOCOL
+============================================================
+
+When you have enough information, return ONLY:
+
+{"action":"final","answer":"FINAL ANSWER"}
+
+============================================================
+STRICT RULES
+============================================================
+
+- Return JSON only.
+- Never output <tool_call>.
+- Never output User Safety.
+- Never classify the request as safe or unsafe.
+- Never invent search results.
+- Never pretend an external action occurred.
+- Use the search results supplied by the Worker.
+`;
+
+  for (
+    let attempt = 0;
+    attempt < maxToolCalls;
+    attempt++
+  ) {
+
+    const ai = await callAI(
+      env,
+      conversation,
+      false
+    );
+
+    const text = (
+      ai.text || ""
+    ).trim();
+
+    let decision;
+
+    try {
+
+      decision = JSON.parse(
+        cleanJson(text)
+      );
+
+    } catch (error) {
+
+      // Give the model one recovery instruction.
+      if (attempt < maxToolCalls - 1) {
+
+        conversation += `
+
+Your previous response was not valid JSON.
+
+You MUST return exactly one of:
+
+{"action":"search","query":"..."}
+
+OR
+
+{"action":"final","answer":"..."}
+
+Return JSON only.
+`;
+
+        continue;
+      }
+
+      return {
+        success: false,
+        provider: ai.provider,
+        answer: text,
+        tool_calls: attempt,
+        protocol_error: true
+      };
+    }
+
+
+    // ========================================================
+    // SEARCH
+    // ========================================================
+
+    if (
+      decision.action === "search" &&
+      typeof decision.query === "string" &&
+      decision.query.trim()
+    ) {
+
+      const searchResult = await searchWeb(
+        env,
+        decision.query
+      );
+
+      conversation += `
+
+============================================================
+REAL WEB SEARCH RESULTS
+============================================================
+
+${JSON.stringify(searchResult)}
+
+============================================================
+
+These results came from the Worker.
+
+Analyze them.
+
+If more research is needed:
+
+{"action":"search","query":"..."}
+
+Otherwise:
+
+{"action":"final","answer":"..."}
+`;
+
+      continue;
+    }
+
+
+    // ========================================================
+    // FINAL
+    // ========================================================
+
+    if (
+      decision.action === "final" &&
+      typeof decision.answer === "string"
+    ) {
+
+      return {
+        success: true,
+        provider: ai.provider,
+        answer: decision.answer,
+        tool_calls: attempt
+      };
+    }
+
+
+    // ========================================================
+    // INVALID ACTION
+    // ========================================================
+
+    conversation += `
+
+Invalid action.
+
+Return ONLY:
+
+{"action":"search","query":"..."}
+
+or:
+
+{"action":"final","answer":"..."}
+`;
+
+  }
+
+
+  return {
+    success: false,
+    provider: "agent",
+    answer: "Maximum web-search limit reached.",
+    tool_calls: maxToolCalls
+  };
+}
+
+
+// ===========================================================
 // AI ROUTER
 // ===========================================================
 
@@ -873,11 +824,13 @@ async function callAI(
   prompt,
   useSearch = false
 ) {
+
   // ---------------------------------------------------------
   // PRIMARY: GEMINI
   // ---------------------------------------------------------
 
   try {
+
     const response = await callGemini(
       env,
       prompt,
@@ -897,6 +850,7 @@ async function callAI(
     // -------------------------------------------------------
 
     try {
+
       const response = await callOpenRouter(
         env,
         prompt
@@ -930,6 +884,13 @@ async function callGemini(
   prompt,
   useSearch = false
 ) {
+
+  if (!env.GEMINI_API_KEY) {
+    throw new Error(
+      "GEMINI_API_KEY is not configured"
+    );
+  }
+
   const body = {
     contents: [
       {
@@ -942,13 +903,11 @@ async function callGemini(
     ]
   };
 
-  if (useSearch) {
-    body.tools = [
-      {
-        google_search: {}
-      }
-    ];
-  }
+  // We deliberately do NOT use Google's search tool here.
+  // Hermes controls web search through Tavily.
+  //
+  // This keeps the tool architecture consistent and makes
+  // the Worker responsible for executing tools.
 
   const response = await fetch(
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
@@ -965,6 +924,7 @@ async function callGemini(
   const data = await response.json();
 
   if (!response.ok) {
+
     throw new Error(
       data?.error?.message ||
       "Gemini API request failed"
@@ -975,7 +935,13 @@ async function callGemini(
     data?.candidates?.[0]?.content?.parts
       ?.map(part => part.text || "")
       .join("") ||
-    "Gemini returned no text.";
+    "";
+
+  if (!text) {
+    throw new Error(
+      "Gemini returned no text"
+    );
+  }
 
   return {
     text,
@@ -992,6 +958,7 @@ async function callOpenRouter(
   env,
   prompt
 ) {
+
   if (!env.OPENROUTER_API_KEY) {
     throw new Error(
       "OPENROUTER_API_KEY is not configured"
@@ -1026,6 +993,7 @@ async function callOpenRouter(
   const data = await response.json();
 
   if (!response.ok) {
+
     throw new Error(
       data?.error?.message ||
       "OpenRouter API request failed"
@@ -1034,7 +1002,13 @@ async function callOpenRouter(
 
   const text =
     data?.choices?.[0]?.message?.content ||
-    "OpenRouter returned no text.";
+    "";
+
+  if (!text) {
+    throw new Error(
+      "OpenRouter returned no text"
+    );
+  }
 
   return {
     text,
@@ -1052,6 +1026,7 @@ async function executeStep(
   task,
   step
 ) {
+
   await env.DB.prepare(`
     UPDATE task_steps
     SET status = 'running',
@@ -1062,31 +1037,29 @@ async function executeStep(
     .run();
 
   try {
-    const response = await callAI(
+
+    // ========================================================
+    // IMPORTANT:
+    // The old code called callAI() here directly.
+    //
+    // Now executeStep() calls runAgent().
+    //
+    // This is the connection that was missing.
+    // ========================================================
+
+    const response = await runAgent(
       env,
-      `
-You are Hermes executing one step of an autonomous task.
-
-OVERALL TASK:
-${task.task}
-
-CURRENT STEP:
-${step.action}
-
-Use available web/search capabilities when current or factual
-information is required.
-
-Execute the step as helpfully as possible.
-
-Clearly distinguish:
-- facts you found
-- analysis
-- things you could not verify
-
-Return a concise execution result.
-      `,
-      true
+      task.task,
+      step.action
     );
+
+    if (!response.success) {
+      throw new Error(
+        response.answer ||
+        "Agent execution failed"
+      );
+    }
+
 
     await env.DB.prepare(`
       UPDATE task_steps
@@ -1094,8 +1067,12 @@ Return a concise execution result.
           result = ?
       WHERE id = ?
     `)
-      .bind(response.text, step.id)
+      .bind(
+        response.answer,
+        step.id
+      )
       .run();
+
 
     return {
       success: true,
@@ -1103,10 +1080,13 @@ Return a concise execution result.
       step_number: step.step_number,
       status: "completed",
       provider: response.provider,
-      result: response.text
+      tool_calls: response.tool_calls,
+      result: response.answer
     };
 
+
   } catch (error) {
+
     const newAttempts =
       step.attempts + 1;
 
@@ -1114,6 +1094,7 @@ Return a concise execution result.
       newAttempts < 3
         ? "pending"
         : "failed";
+
 
     await env.DB.prepare(`
       UPDATE task_steps
@@ -1128,6 +1109,7 @@ Return a concise execution result.
       )
       .run();
 
+
     await env.DB.prepare(`
       UPDATE tasks
       SET status = ?
@@ -1140,6 +1122,7 @@ Return a concise execution result.
         task.id
       )
       .run();
+
 
     return {
       success: false,
@@ -1164,6 +1147,7 @@ function json(
   data,
   status = 200
 ) {
+
   return new Response(
     JSON.stringify(data),
     {
@@ -1177,13 +1161,44 @@ function json(
 
 
 // ===========================================================
-// CLEAN GEMINI JSON
+// CLEAN AI JSON
 // ===========================================================
 
 function cleanJson(text) {
-  return text
+
+  if (!text) {
+    return "";
+  }
+
+  let cleaned = text.trim();
+
+  cleaned = cleaned
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
     .replace(/\s*```$/i, "")
     .trim();
+
+
+  // Sometimes a model puts explanatory text before JSON.
+  // Try to extract the outermost JSON object.
+
+  const firstBrace =
+    cleaned.indexOf("{");
+
+  const lastBrace =
+    cleaned.lastIndexOf("}");
+
+  if (
+    firstBrace !== -1 &&
+    lastBrace !== -1 &&
+    lastBrace > firstBrace
+  ) {
+    cleaned =
+      cleaned.substring(
+        firstBrace,
+        lastBrace + 1
+      );
+  }
+
+  return cleaned.trim();
 }
