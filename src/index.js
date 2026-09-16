@@ -512,6 +512,81 @@ Clearly distinguish:
         remaining_steps: Number(remaining.count)
       });
     }
+    // =========================================================
+// WEB SEARCH TOOL
+// POST /search
+// =========================================================
+
+if (
+  request.method === "POST" &&
+  url.pathname === "/search"
+) {
+  let data;
+
+  try {
+    data = await request.json();
+  } catch (error) {
+    return json({
+      success: false,
+      error: "Invalid JSON body"
+    }, 400);
+  }
+
+  if (
+    !data.query ||
+    typeof data.query !== "string" ||
+    !data.query.trim()
+  ) {
+    return json({
+      success: false,
+      error: "Search query is required"
+    }, 400);
+  }
+
+  try {
+    const response = await fetch(
+      "https://api.tavily.com/search",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          api_key: env.TAVILY_API_KEY,
+          query: data.query.trim(),
+          search_depth: "basic",
+          max_results: 5,
+          include_answer: true
+        })
+      }
+    );
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        result?.detail ||
+        result?.error ||
+        "Tavily search failed"
+      );
+    }
+
+    return json({
+      success: true,
+      tool: "web_search",
+      query: data.query.trim(),
+      answer: result.answer || null,
+      results: result.results || []
+    });
+
+  } catch (error) {
+    return json({
+      success: false,
+      tool: "web_search",
+      error: error.message
+    }, 500);
+  }
+}
 
     // =========================================================
     // VIEW TASK STEPS
