@@ -17,6 +17,19 @@ export default {
     } catch (e) {
       // result column already exists
     }
+    await env.DB.prepare(`
+  CREATE TABLE IF NOT EXISTS task_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    step_number INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    result TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+  )
+`).run();
 
     // Run one pending task
     if (
