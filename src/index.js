@@ -1539,9 +1539,45 @@ const evaluatedResults =
       const newSources = relevantResults.map(result => ({
   title: result.title || "",
   url: result.url || "",
-  content: result.content || ""
-})).filter(source => source.url);
-      
+  content: result.content || "",
+
+  relevance_score:
+    result.relevance_score ?? null,
+
+  source_quality:
+    result.source_quality ?? null,
+
+  evidence_strength:
+    result.evidence_strength || "low",
+
+  recency:
+    result.recency || "unknown",
+
+  source_type:
+    result.source_type || "unknown",
+
+  india_relevance:
+    result.india_relevance ?? null,
+
+  evidence:
+    Array.isArray(result.evidence)
+      ? result.evidence
+      : [],
+
+  claims:
+    Array.isArray(result.claims)
+      ? result.claims
+      : [],
+
+  duplicate_group:
+    result.duplicate_group ?? 0,
+
+  contradiction:
+    result.contradiction === true,
+
+  relevance_reason:
+    result.relevance_reason || ""
+})).filter(source => source.url);      
       for (const source of newSources) {
 
         const exists = collectedSources.some(
