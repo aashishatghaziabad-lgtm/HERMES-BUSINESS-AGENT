@@ -165,6 +165,26 @@ for (const step of plan.steps) {
         );
       }
     }
+    // Clear test tasks
+if (
+  request.method === "POST" &&
+  new URL(request.url).pathname === "/cleanup"
+) {
+  await env.DB.prepare("DELETE FROM task_steps").run();
+  await env.DB.prepare("DELETE FROM tasks").run();
+
+  return new Response(
+    JSON.stringify({
+      success: true,
+      message: "Test tasks cleared 🧹"
+    }),
+    {
+      headers: {
+        "content-type": "application/json"
+      }
+    }
+  );
+}
 
     // Show Hermes memory
     const tasks = await env.DB.prepare(
