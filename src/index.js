@@ -6,6 +6,10 @@ export default {
     // DATABASE SETUP
     // =========================================================
 
+    // ---------------------------------------------------------
+    // TASKS TABLE
+    // ---------------------------------------------------------
+
     await env.DB.prepare(`
       CREATE TABLE IF NOT EXISTS tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -16,29 +20,14 @@ export default {
       )
     `).run();
 
-    try {
-  await env.DB.prepare(
-    "ALTER TABLE tasks ADD COLUMN result TEXT"
-  ).run();
-} catch (e) {
-  // Column already exists
-}
 
-try {
-  await env.DB.prepare(
-    "ALTER TABLE task_steps ADD COLUMN sources TEXT"
-  ).run();
-} catch (e) {
-  // Column already exists
-}
+    // ---------------------------------------------------------
+    // TASK STEPS TABLE
+    // IMPORTANT:
+    // sources + tool_calls are included here so a fresh
+    // database gets the complete schema immediately.
+    // ---------------------------------------------------------
 
-try {
-  await env.DB.prepare(
-    "ALTER TABLE task_steps ADD COLUMN tool_calls INTEGER DEFAULT 0"
-  ).run();
-} catch (e) {
-  // Column already exists
-}
     await env.DB.prepare(`
       CREATE TABLE IF NOT EXISTS task_steps (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,10 +37,42 @@ try {
         status TEXT NOT NULL DEFAULT 'pending',
         result TEXT,
         attempts INTEGER NOT NULL DEFAULT 0,
+        sources TEXT,
+        tool_calls INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (task_id) REFERENCES tasks(id)
       )
     `).run();
+
+
+    // =========================================================
+    // DATABASE MIGRATIONS
+    // For existing databases
+    // =========================================================
+
+    try {
+      await env.DB.prepare(
+        "ALTER TABLE tasks ADD COLUMN result TEXT"
+      ).run();
+    } catch (e) {
+      // Column already exists
+    }
+
+    try {
+      await env.DB.prepare(
+        "ALTER TABLE task_steps ADD COLUMN sources TEXT"
+      ).run();
+    } catch (e) {
+      // Column already exists
+    }
+
+    try {
+      await env.DB.prepare(
+        "ALTER TABLE task_steps ADD COLUMN tool_calls INTEGER DEFAULT 0"
+      ).run();
+    } catch (e) {
+      // Column already exists
+    }
 
 
     // =========================================================
@@ -63,6 +84,7 @@ try {
       request.method === "POST" &&
       url.pathname === "/task"
     ) {
+
       let data;
 
       try {
@@ -73,6 +95,7 @@ try {
           error: "Invalid JSON body"
         }, 400);
       }
+
 
       if (
         !data.task ||
@@ -85,11 +108,16 @@ try {
         }, 400);
       }
 
+
       const result = await env.DB.prepare(
         "INSERT INTO tasks (task, status) VALUES (?, ?)"
       )
-        .bind(data.task.trim(), "pending")
+        .bind(
+          data.task.trim(),
+          "pending"
+        )
         .run();
+
 
       return json({
         success: true,
@@ -109,7 +137,10 @@ try {
       request.method === "POST" &&
       url.pathname === "/plan"
     ) {
-      const taskId = url.searchParams.get("task_id");
+
+      const taskId =
+        url.searchParams.get("task_id");
+
 
       if (!taskId) {
         return json({
@@ -118,11 +149,13 @@ try {
         }, 400);
       }
 
+
       const task = await env.DB.prepare(
         "SELECT * FROM tasks WHERE id = ?"
       )
         .bind(taskId)
         .first();
+
 
       if (!task) {
         return json({
@@ -131,6 +164,7 @@ try {
         }, 404);
       }
 
+
       if (task.status !== "pending") {
         return json({
           success: false,
@@ -138,15 +172,19 @@ try {
         }, 400);
       }
 
+
       await env.DB.prepare(
         "UPDATE tasks SET status = 'planning' WHERE id = ?"
       )
         .bind(task.id)
         .run();
 
+
       try {
+
         const response = await callAI(
           env,
+
           `
 You are Hermes, an autonomous digital business assistant.
 
@@ -174,24 +212,39 @@ Rules:
 USER TASK:
 ${task.task}
           `,
+
           false
         );
 
-        const cleanResult = cleanJson(response.text);
-        const plan = JSON.parse(cleanResult);
+
+        const cleanResult =
+          cleanJson(response.text);
+
+        const plan =
+          JSON.parse(cleanResult);
+
 
         if (
           !plan.steps ||
           !Array.isArray(plan.steps) ||
           plan.steps.length === 0
         ) {
-          throw new Error("AI returned an invalid plan");
+          throw new Error(
+            "AI returned an invalid plan"
+          );
         }
 
+
         for (const step of plan.steps) {
+
           await env.DB.prepare(`
             INSERT INTO task_steps
-            (task_id, step_number, action, status)
+            (
+              task_id,
+              step_number,
+              action,
+              status
+            )
             VALUES (?, ?, ?, 'pending')
           `)
             .bind(
@@ -202,11 +255,16 @@ ${task.task}
             .run();
         }
 
+
         await env.DB.prepare(
           "UPDATE tasks SET status = 'planned', result = ? WHERE id = ?"
         )
-          .bind(cleanResult, task.id)
+          .bind(
+            cleanResult,
+            task.id
+          )
           .run();
+
 
         return json({
           success: true,
@@ -216,13 +274,18 @@ ${task.task}
           provider: response.provider
         });
 
+
       } catch (error) {
 
         await env.DB.prepare(
           "UPDATE tasks SET status = 'failed', result = ? WHERE id = ?"
         )
-          .bind(error.message, task.id)
+          .bind(
+            error.message,
+            task.id
+          )
           .run();
+
 
         return json({
           success: false,
@@ -243,7 +306,10 @@ ${task.task}
       request.method === "POST" &&
       url.pathname === "/step"
     ) {
-      const taskId = url.searchParams.get("task_id");
+
+      const taskId =
+        url.searchParams.get("task_id");
+
 
       if (!taskId) {
         return json({
@@ -252,11 +318,13 @@ ${task.task}
         }, 400);
       }
 
+
       const task = await env.DB.prepare(
         "SELECT * FROM tasks WHERE id = ?"
       )
         .bind(taskId)
         .first();
+
 
       if (!task) {
         return json({
@@ -264,6 +332,7 @@ ${task.task}
           error: "Task not found"
         }, 404);
       }
+
 
       const step = await env.DB.prepare(`
         SELECT *
@@ -276,6 +345,7 @@ ${task.task}
         .bind(task.id)
         .first();
 
+
       if (!step) {
         return json({
           success: true,
@@ -283,16 +353,22 @@ ${task.task}
         });
       }
 
-      const stepResponse = await executeStep(
-        env,
-        task,
-        step
-      );
 
-      return json({
-        ...stepResponse,
-        task_id: task.id
-      }, stepResponse.success ? 200 : 500);
+      const stepResponse =
+        await executeStep(
+          env,
+          task,
+          step
+        );
+
+
+      return json(
+        {
+          ...stepResponse,
+          task_id: task.id
+        },
+        stepResponse.success ? 200 : 500
+      );
     }
 
 
@@ -305,7 +381,10 @@ ${task.task}
       request.method === "POST" &&
       url.pathname === "/run-task"
     ) {
-      const taskId = url.searchParams.get("task_id");
+
+      const taskId =
+        url.searchParams.get("task_id");
+
 
       if (!taskId) {
         return json({
@@ -314,11 +393,13 @@ ${task.task}
         }, 400);
       }
 
+
       const task = await env.DB.prepare(
         "SELECT * FROM tasks WHERE id = ?"
       )
         .bind(taskId)
         .first();
+
 
       if (!task) {
         return json({
@@ -326,6 +407,7 @@ ${task.task}
           error: "Task not found"
         }, 404);
       }
+
 
       const steps = await env.DB.prepare(`
         SELECT *
@@ -336,27 +418,38 @@ ${task.task}
         .bind(task.id)
         .all();
 
-      if (!steps.results || steps.results.length === 0) {
+
+      if (
+        !steps.results ||
+        steps.results.length === 0
+      ) {
         return json({
           success: false,
           error: "Task has no planned steps"
         }, 400);
       }
 
-      const pendingSteps = steps.results.filter(
-        step => step.status === "pending"
-      );
 
-      const failedSteps = steps.results.filter(
-        step => step.status === "failed"
-      );
+      const pendingSteps =
+        steps.results.filter(
+          step => step.status === "pending"
+        );
+
+
+      const failedSteps =
+        steps.results.filter(
+          step => step.status === "failed"
+        );
+
 
       if (failedSteps.length > 0) {
+
         await env.DB.prepare(
           "UPDATE tasks SET status = 'failed' WHERE id = ?"
         )
           .bind(task.id)
           .run();
+
 
         return json({
           success: false,
@@ -366,12 +459,15 @@ ${task.task}
         });
       }
 
+
       if (pendingSteps.length === 0) {
+
         await env.DB.prepare(
           "UPDATE tasks SET status = 'completed' WHERE id = ?"
         )
           .bind(task.id)
           .run();
+
 
         return json({
           success: true,
@@ -381,34 +477,51 @@ ${task.task}
         });
       }
 
-      const step = pendingSteps[0];
 
-      const stepResponse = await executeStep(
-        env,
-        task,
-        step
-      );
+      const step =
+        pendingSteps[0];
+
+
+      const stepResponse =
+        await executeStep(
+          env,
+          task,
+          step
+        );
+
 
       if (!stepResponse.success) {
-        return json(stepResponse, 500);
+        return json(
+          stepResponse,
+          500
+        );
       }
 
-      const remaining = await env.DB.prepare(`
-        SELECT COUNT(*) AS count
-        FROM task_steps
-        WHERE task_id = ?
-        AND status != 'completed'
-      `)
-        .bind(task.id)
-        .first();
 
-      if (Number(remaining.count) === 0) {
+      const remaining =
+        await env.DB.prepare(`
+          SELECT COUNT(*) AS count
+          FROM task_steps
+          WHERE task_id = ?
+          AND status != 'completed'
+        `)
+          .bind(task.id)
+          .first();
+
+
+      if (
+        Number(remaining.count) === 0
+      ) {
 
         await env.DB.prepare(
           "UPDATE tasks SET status = 'completed', result = ? WHERE id = ?"
         )
-          .bind(stepResponse.result || "", task.id)
+          .bind(
+            stepResponse.result || "",
+            task.id
+          )
           .run();
+
 
         return json({
           success: true,
@@ -419,11 +532,13 @@ ${task.task}
         });
       }
 
+
       await env.DB.prepare(
         "UPDATE tasks SET status = 'planned' WHERE id = ?"
       )
         .bind(task.id)
         .run();
+
 
       return json({
         success: true,
@@ -431,7 +546,8 @@ ${task.task}
         status: "planned",
         message: "Step completed. More steps remain.",
         completed_step: stepResponse,
-        remaining_steps: Number(remaining.count)
+        remaining_steps:
+          Number(remaining.count)
       });
     }
 
@@ -445,6 +561,7 @@ ${task.task}
       request.method === "POST" &&
       url.pathname === "/search"
     ) {
+
       let data;
 
       try {
@@ -455,6 +572,7 @@ ${task.task}
           error: "Invalid JSON body"
         }, 400);
       }
+
 
       if (
         !data.query ||
@@ -467,18 +585,22 @@ ${task.task}
         }, 400);
       }
 
+
       try {
 
-        const result = await searchWeb(
-          env,
-          data.query
-        );
+        const result =
+          await searchWeb(
+            env,
+            data.query
+          );
+
 
         return json({
           success: true,
           tool: "web_search",
           ...result
         });
+
 
       } catch (error) {
 
@@ -500,7 +622,10 @@ ${task.task}
       request.method === "GET" &&
       url.pathname === "/steps"
     ) {
-      const taskId = url.searchParams.get("task_id");
+
+      const taskId =
+        url.searchParams.get("task_id");
+
 
       if (!taskId) {
         return json({
@@ -508,6 +633,7 @@ ${task.task}
           error: "task_id is required"
         }, 400);
       }
+
 
       const steps = await env.DB.prepare(`
         SELECT *
@@ -517,6 +643,7 @@ ${task.task}
       `)
         .bind(taskId)
         .all();
+
 
       return json({
         task_id: taskId,
@@ -534,23 +661,31 @@ ${task.task}
       request.method === "POST" &&
       url.pathname === "/cleanup"
     ) {
+
       const confirmation =
         url.searchParams.get("confirm");
 
-      if (confirmation !== "TEST_ONLY") {
+
+      if (
+        confirmation !== "TEST_ONLY"
+      ) {
         return json({
           success: false,
-          error: "Cleanup requires confirm=TEST_ONLY"
+          error:
+            "Cleanup requires confirm=TEST_ONLY"
         }, 403);
       }
+
 
       await env.DB.prepare(
         "DELETE FROM task_steps"
       ).run();
 
+
       await env.DB.prepare(
         "DELETE FROM tasks"
       ).run();
+
 
       return json({
         success: true,
@@ -563,11 +698,14 @@ ${task.task}
     // DEFAULT MEMORY VIEW
     // =========================================================
 
-    const tasks = await env.DB.prepare(`
-      SELECT *
-      FROM tasks
-      ORDER BY id DESC
-    `).all();
+    const tasks =
+      await env.DB.prepare(`
+        SELECT *
+        FROM tasks
+        ORDER BY id DESC
+      `)
+        .all();
+
 
     return json({
       hermes: "alive 🚀",
@@ -582,7 +720,10 @@ ${task.task}
 // WEB SEARCH
 // ===========================================================
 
-async function searchWeb(env, query) {
+async function searchWeb(
+  env,
+  query
+) {
 
   if (!env.TAVILY_API_KEY) {
     throw new Error(
@@ -590,26 +731,42 @@ async function searchWeb(env, query) {
     );
   }
 
+
   const response = await fetch(
     "https://api.tavily.com/search",
     {
       method: "POST",
+
       headers: {
         "Content-Type": "application/json"
       },
+
       body: JSON.stringify({
-        api_key: env.TAVILY_API_KEY,
-        query: query.trim(),
-        search_depth: "basic",
-        max_results: 5,
-        include_answer: false
+        api_key:
+          env.TAVILY_API_KEY,
+
+        query:
+          query.trim(),
+
+        search_depth:
+          "basic",
+
+        max_results:
+          5,
+
+        include_answer:
+          false
       })
     }
   );
 
-  const result = await response.json();
+
+  const result =
+    await response.json();
+
 
   if (!response.ok) {
+
     throw new Error(
       result?.detail ||
       result?.error ||
@@ -617,9 +774,13 @@ async function searchWeb(env, query) {
     );
   }
 
+
   return {
-    query: query.trim(),
-    results: result.results || []
+    query:
+      query.trim(),
+
+    results:
+      result.results || []
   };
 }
 
@@ -635,6 +796,11 @@ async function runAgent(
 ) {
 
   const maxToolCalls = 3;
+
+  let collectedSources = [];
+
+  let totalToolCalls = 0;
+
 
   let conversation = `
 You are Hermes, an autonomous business research assistant.
@@ -682,7 +848,9 @@ STRICT RULES
 - Never invent search results.
 - Never pretend an external action occurred.
 - Use the search results supplied by the Worker.
+- Base factual claims on the supplied search evidence whenever possible.
 `;
+
 
   for (
     let attempt = 0;
@@ -690,34 +858,40 @@ STRICT RULES
     attempt++
   ) {
 
-    const ai = await callAI(
-      env,
-      conversation,
-      false
-    );
+    const ai =
+      await callAI(
+        env,
+        conversation,
+        false
+      );
 
-    const text = (
-      ai.text || ""
-    ).trim();
+
+    const text =
+      (ai.text || "").trim();
+
 
     let decision;
 
+
     try {
 
-      decision = JSON.parse(
-        cleanJson(text)
-      );
+      decision =
+        JSON.parse(
+          cleanJson(text)
+        );
 
     } catch (error) {
 
-      // Give the model one recovery instruction.
-      if (attempt < maxToolCalls - 1) {
+      if (
+        attempt <
+        maxToolCalls - 1
+      ) {
 
         conversation += `
 
 Your previous response was not valid JSON.
 
-You MUST return exactly one of:
+Return ONLY one of these:
 
 {"action":"search","query":"..."}
 
@@ -725,24 +899,31 @@ OR
 
 {"action":"final","answer":"..."}
 
-Return JSON only.
+JSON only.
 `;
 
         continue;
       }
 
+
       return {
         success: false,
-        provider: ai.provider,
-        answer: text,
-        tool_calls: attempt,
-        protocol_error: true
+        provider:
+          ai.provider,
+        answer:
+          text,
+        tool_calls:
+          totalToolCalls,
+        sources:
+          collectedSources,
+        protocol_error:
+          true
       };
     }
 
 
     // ========================================================
-    // SEARCH
+    // SEARCH REQUEST
     // ========================================================
 
     if (
@@ -751,23 +932,56 @@ Return JSON only.
       decision.query.trim()
     ) {
 
-      const searchResult = await searchWeb(
-        env,
-        decision.query
-      );
-      const sources = (searchResult.results || []).map(
-  result => ({
-    title: result.title || "",
-    url: result.url || "",
-    content: result.content || ""
-  })
-);
-      conversation += `
+      totalToolCalls++;
 
-SOURCE EVIDENCE:
 
-${JSON.stringify(sources)}
-`;
+      const searchResult =
+        await searchWeb(
+          env,
+          decision.query
+        );
+
+
+      const newSources =
+        (searchResult.results || [])
+          .map(result => ({
+            title:
+              result.title || "",
+
+            url:
+              result.url || "",
+
+            content:
+              result.content || ""
+          }))
+          .filter(
+            source =>
+              source.url
+          );
+
+
+      // ------------------------------------------------------
+      // Deduplicate sources
+      // ------------------------------------------------------
+
+      for (
+        const source of newSources
+      ) {
+
+        const exists =
+          collectedSources.some(
+            existing =>
+              existing.url === source.url
+          );
+
+
+        if (!exists) {
+          collectedSources.push(
+            source
+          );
+        }
+      }
+
 
       conversation += `
 
@@ -775,15 +989,28 @@ ${JSON.stringify(sources)}
 REAL WEB SEARCH RESULTS
 ============================================================
 
-${JSON.stringify(searchResult)}
+SEARCH QUERY:
+${decision.query}
+
+RESULTS:
+
+${JSON.stringify(searchResult.results)}
+
+============================================================
+SOURCE EVIDENCE
+============================================================
+
+${JSON.stringify(newSources)}
 
 ============================================================
 
-These results came from the Worker.
+These results came directly from the Worker.
 
 Analyze them.
 
-If more research is needed:
+Do not invent facts.
+
+If more research is genuinely required:
 
 {"action":"search","query":"..."}
 
@@ -797,7 +1024,7 @@ Otherwise:
 
 
     // ========================================================
-    // FINAL
+    // FINAL ANSWER
     // ========================================================
 
     if (
@@ -807,9 +1034,18 @@ Otherwise:
 
       return {
         success: true,
-        provider: ai.provider,
-        answer: decision.answer,
-        tool_calls: attempt
+
+        provider:
+          ai.provider,
+
+        answer:
+          decision.answer,
+
+        tool_calls:
+          totalToolCalls,
+
+        sources:
+          collectedSources
       };
     }
 
@@ -826,19 +1062,27 @@ Return ONLY:
 
 {"action":"search","query":"..."}
 
-or:
+OR:
 
 {"action":"final","answer":"..."}
 `;
-
   }
 
 
   return {
     success: false,
-    provider: "agent",
-    answer: "Maximum web-search limit reached.",
-    tool_calls: maxToolCalls
+
+    provider:
+      "agent",
+
+    answer:
+      "Maximum web-search limit reached.",
+
+    tool_calls:
+      totalToolCalls,
+
+    sources:
+      collectedSources
   };
 }
 
@@ -859,19 +1103,28 @@ async function callAI(
 
   try {
 
-    const response = await callGemini(
-      env,
-      prompt,
-      useSearch
-    );
+    const response =
+      await callGemini(
+        env,
+        prompt,
+        useSearch
+      );
+
 
     return {
-      provider: "gemini",
-      text: response.text,
-      raw: response.raw
+      provider:
+        "gemini",
+
+      text:
+        response.text,
+
+      raw:
+        response.raw
     };
 
+
   } catch (geminiError) {
+
 
     // -------------------------------------------------------
     // FALLBACK: OPENROUTER FREE
@@ -879,17 +1132,27 @@ async function callAI(
 
     try {
 
-      const response = await callOpenRouter(
-        env,
-        prompt
-      );
+      const response =
+        await callOpenRouter(
+          env,
+          prompt
+        );
+
 
       return {
-        provider: "openrouter/free",
-        text: response.text,
-        raw: response.raw,
-        fallback_from: "gemini"
+        provider:
+          "openrouter/free",
+
+        text:
+          response.text,
+
+        raw:
+          response.raw,
+
+        fallback_from:
+          "gemini"
       };
+
 
     } catch (openRouterError) {
 
@@ -919,37 +1182,49 @@ async function callGemini(
     );
   }
 
+
   const body = {
+
     contents: [
       {
         parts: [
           {
-            text: prompt
+            text:
+              prompt
           }
         ]
       }
     ]
   };
 
-  // We deliberately do NOT use Google's search tool here.
+
   // Hermes controls web search through Tavily.
-  //
-  // This keeps the tool architecture consistent and makes
-  // the Worker responsible for executing tools.
+  // We deliberately do not use Google's search tool here.
 
-  const response = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": env.GEMINI_API_KEY
-      },
-      body: JSON.stringify(body)
-    }
-  );
 
-  const data = await response.json();
+  const response =
+    await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type":
+            "application/json",
+
+          "x-goog-api-key":
+            env.GEMINI_API_KEY
+        },
+
+        body:
+          JSON.stringify(body)
+      }
+    );
+
+
+  const data =
+    await response.json();
+
 
   if (!response.ok) {
 
@@ -959,17 +1234,24 @@ async function callGemini(
     );
   }
 
+
   const text =
     data?.candidates?.[0]?.content?.parts
-      ?.map(part => part.text || "")
+      ?.map(
+        part =>
+          part.text || ""
+      )
       .join("") ||
     "";
 
+
   if (!text) {
+
     throw new Error(
       "Gemini returned no text"
     );
   }
+
 
   return {
     text,
@@ -993,32 +1275,49 @@ async function callOpenRouter(
     );
   }
 
-  const response = await fetch(
-    "https://openrouter.ai/api/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization":
-          `Bearer ${env.OPENROUTER_API_KEY}`,
-        "HTTP-Referer":
-          "https://hermes-business-agent.aashishatghaziabad.workers.dev",
-        "X-Title":
-          "Hermes Business Agent"
-      },
-      body: JSON.stringify({
-        model: "openrouter/free",
-        messages: [
-          {
-            role: "user",
-            content: prompt
-          }
-        ]
-      })
-    }
-  );
 
-  const data = await response.json();
+  const response =
+    await fetch(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type":
+            "application/json",
+
+          "Authorization":
+            `Bearer ${env.OPENROUTER_API_KEY}`,
+
+          "HTTP-Referer":
+            "https://hermes-business-agent.aashishatghaziabad.workers.dev",
+
+          "X-Title":
+            "Hermes Business Agent"
+        },
+
+        body:
+          JSON.stringify({
+            model:
+              "openrouter/free",
+
+            messages: [
+              {
+                role:
+                  "user",
+
+                content:
+                  prompt
+              }
+            ]
+          })
+      }
+    );
+
+
+  const data =
+    await response.json();
+
 
   if (!response.ok) {
 
@@ -1028,15 +1327,19 @@ async function callOpenRouter(
     );
   }
 
+
   const text =
     data?.choices?.[0]?.message?.content ||
     "";
 
+
   if (!text) {
+
     throw new Error(
       "OpenRouter returned no text"
     );
   }
+
 
   return {
     text,
@@ -1064,24 +1367,23 @@ async function executeStep(
     .bind(step.id)
     .run();
 
+
   try {
 
     // ========================================================
-    // IMPORTANT:
-    // The old code called callAI() here directly.
-    //
-    // Now executeStep() calls runAgent().
-    //
-    // This is the connection that was missing.
+    // REAL HERMES AGENT
     // ========================================================
 
-    const response = await runAgent(
-      env,
-      task.task,
-      step.action
-    );
+    const response =
+      await runAgent(
+        env,
+        task.task,
+        step.action
+      );
+
 
     if (!response.success) {
+
       throw new Error(
         response.answer ||
         "Agent execution failed"
@@ -1089,27 +1391,58 @@ async function executeStep(
     }
 
 
+    // ========================================================
+    // SAVE RESULT + SOURCES + TOOL CALLS
+    // ========================================================
+
     await env.DB.prepare(`
       UPDATE task_steps
       SET status = 'completed',
-          result = ?
+          result = ?,
+          sources = ?,
+          tool_calls = ?
       WHERE id = ?
     `)
       .bind(
+
         response.answer,
+
+        JSON.stringify(
+          response.sources || []
+        ),
+
+        response.tool_calls || 0,
+
         step.id
       )
       .run();
 
 
     return {
-      success: true,
-      step_id: step.id,
-      step_number: step.step_number,
-      status: "completed",
-      provider: response.provider,
-      tool_calls: response.tool_calls,
-      result: response.answer
+
+      success:
+        true,
+
+      step_id:
+        step.id,
+
+      step_number:
+        step.step_number,
+
+      status:
+        "completed",
+
+      provider:
+        response.provider,
+
+      tool_calls:
+        response.tool_calls || 0,
+
+      sources:
+        response.sources || [],
+
+      result:
+        response.answer
     };
 
 
@@ -1117,6 +1450,7 @@ async function executeStep(
 
     const newAttempts =
       step.attempts + 1;
+
 
     const nextStatus =
       newAttempts < 3
@@ -1144,24 +1478,37 @@ async function executeStep(
       WHERE id = ?
     `)
       .bind(
+
         nextStatus === "pending"
           ? "planned"
           : "failed",
+
         task.id
       )
       .run();
 
 
     return {
-      success: false,
-      step_id: step.id,
-      step_number: step.step_number,
+
+      success:
+        false,
+
+      step_id:
+        step.id,
+
+      step_number:
+        step.step_number,
+
       status:
         nextStatus === "pending"
           ? "retrying"
           : "failed",
-      attempts: newAttempts,
-      error: error.message
+
+      attempts:
+        newAttempts,
+
+      error:
+        error.message
     };
   }
 }
@@ -1177,11 +1524,15 @@ function json(
 ) {
 
   return new Response(
+
     JSON.stringify(data),
+
     {
       status,
+
       headers: {
-        "content-type": "application/json"
+        "content-type":
+          "application/json"
       }
     }
   );
@@ -1198,28 +1549,57 @@ function cleanJson(text) {
     return "";
   }
 
-  let cleaned = text.trim();
 
+  let cleaned =
+    text.trim();
+
+
+  // ---------------------------------------------------------
   // Remove markdown code fences
-  cleaned = cleaned
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/\s*```$/i, "")
-    .trim();
+  // ---------------------------------------------------------
 
-  // Find the first JSON object
-  const firstBrace = cleaned.indexOf("{");
+  cleaned =
+    cleaned
+      .replace(
+        /^```json\s*/i,
+        ""
+      )
+      .replace(
+        /^```\s*/i,
+        ""
+      )
+      .replace(
+        /\s*```$/i,
+        ""
+      )
+      .trim();
 
-  if (firstBrace === -1) {
+
+  // ---------------------------------------------------------
+  // Find first JSON object
+  // ---------------------------------------------------------
+
+  const firstBrace =
+    cleaned.indexOf("{");
+
+
+  if (
+    firstBrace === -1
+  ) {
     return cleaned;
   }
 
-  // Find the matching closing brace.
-  // This prevents extra model text after the JSON
-  // from breaking JSON.parse().
+
+  // ---------------------------------------------------------
+  // Find matching closing brace
+  // ---------------------------------------------------------
+
   let depth = 0;
+
   let inString = false;
+
   let escaped = false;
+
 
   for (
     let i = firstBrace;
@@ -1227,42 +1607,77 @@ function cleanJson(text) {
     i++
   ) {
 
-    const char = cleaned[i];
+    const char =
+      cleaned[i];
+
 
     if (escaped) {
-      escaped = false;
+
+      escaped =
+        false;
+
       continue;
     }
 
-    if (char === "\\") {
-      escaped = true;
+
+    if (
+      char === "\\"
+    ) {
+
+      escaped =
+        true;
+
       continue;
     }
 
-    if (char === '"') {
-      inString = !inString;
+
+    if (
+      char === '"'
+    ) {
+
+      inString =
+        !inString;
+
       continue;
     }
+
 
     if (inString) {
       continue;
     }
 
-    if (char === "{") {
+
+    if (
+      char === "{"
+    ) {
+
       depth++;
     }
 
-    if (char === "}") {
+
+    if (
+      char === "}"
+    ) {
+
       depth--;
 
-      if (depth === 0) {
-        return cleaned.substring(
-          firstBrace,
-          i + 1
-        ).trim();
+
+      if (
+        depth === 0
+      ) {
+
+        return cleaned
+          .substring(
+            firstBrace,
+            i + 1
+          )
+          .trim();
       }
     }
   }
 
-  return cleaned.substring(firstBrace).trim();
+
+  return cleaned
+    .substring(firstBrace)
+    .trim();
 }
