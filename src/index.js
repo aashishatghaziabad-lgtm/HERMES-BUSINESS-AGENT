@@ -222,6 +222,167 @@ if (
     }
   );
 }
+    // Run all remaining steps for the oldest pending task
+if (
+  request.method === "POST" &&
+  new URL(request.url).pathname === "/run-task"
+) {
+  const task = await env.DB.prepare(`
+    SELECT * FROM tasks
+    WHERE status = 'completed'
+    AND id IN (
+      SELECT task_id FROM task_steps
+      WHERE status = 'pending'
+    )
+    ORDER BY id ASC
+    LIMIT 1
+  `).first();
+
+  if (!task) {
+    return new Response(
+      JSON.stringify({
+        success: true,
+        message: "No task with pending steps found 💤"
+      }),
+      {
+        headers: {
+          "content-type": "application/json"
+        }
+      }
+    );
+  }
+
+  const steps = await env.DB.prepare(`
+    SELECT * FROM task_steps
+    WHERE task_id = ?
+    AND status = 'pending'
+    ORDER BY step_number ASC
+  `)
+    .bind(task.id)
+    .all();
+
+  const results = [];
+
+  for (const step of steps.results) {
+    await env.DB.prepare(`
+      UPDATE task_steps
+      SET status = 'running',
+          attempts = attempts + 1
+      WHERE id = ?
+    `)
+      .bind(step.id)
+      .run();
+
+    try {
+      const response = await fetch(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": env.GEMINI_API_KEY
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    text: `You are Hermes executing a step of this task.
+
+Overall task:
+${task.task}
+
+Current step:
+${step.action}
+
+Execute the step as helpfully as possible.
+Return a concise result of what you accomplished.`
+                  }
+                ]
+              }
+            ]
+          })
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data?.error?.message || "Gemini API request failed"
+        );
+      }
+
+      const result =
+        data?.candidates?.[0]?.content?.parts
+          ?.map(part => part.text || "")
+          .join("") || "Gemini returned no text.";
+
+      await env.DB.prepare(`
+        UPDATE task_steps
+        SET status = 'completed',
+            result = ?
+        WHERE id = ?
+      `)
+        .bind(result, step.id)
+        .run();
+
+      results.push({
+        step: step.step_number,
+        status: "completed",
+        result
+      });
+
+    } catch (error) {
+      await env.DB.prepare(`
+        UPDATE task_steps
+        SET status = 'failed',
+            result = ?
+        WHERE id = ?
+      `)
+        .bind(error.message, step.id)
+        .run();
+
+      return new Response(
+        JSON.stringify({
+          success: false,
+          task_id: task.id,
+          failed_step: step.step_number,
+          error: error.message,
+          results
+        }),
+        {
+          status: 500,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    }
+  }
+
+  await env.DB.prepare(`
+    UPDATE tasks
+    SET status = 'completed'
+    WHERE id = ?
+  `)
+    .bind(task.id)
+    .run();
+
+  return new Response(
+    JSON.stringify({
+      success: true,
+      task_id: task.id,
+      status: "completed",
+      results
+    }),
+    {
+      headers: {
+        "content-type": "application/json"
+      }
+    }
+  );
+}
     // Execute one pending step
 if (
   request.method === "POST" &&
