@@ -85,7 +85,7 @@ export default {
 
     // =========================================================
     // PLAN TASK
-    // POST /plan?task_id=17
+    // POST /plan?task_id=18
     // =========================================================
 
     if (
@@ -128,7 +128,9 @@ export default {
         .run();
 
       try {
-        const response = await callGemini(env, `
+        const response = await callAI(
+          env,
+          `
 You are Hermes, an autonomous digital business assistant.
 
 Create a practical execution plan for this task.
@@ -154,7 +156,9 @@ Rules:
 
 USER TASK:
 ${task.task}
-        `);
+          `,
+          false
+        );
 
         const cleanResult = cleanJson(response.text);
         const plan = JSON.parse(cleanResult);
@@ -164,7 +168,7 @@ ${task.task}
           !Array.isArray(plan.steps) ||
           plan.steps.length === 0
         ) {
-          throw new Error("Gemini returned an invalid plan");
+          throw new Error("AI returned an invalid plan");
         }
 
         for (const step of plan.steps) {
@@ -191,7 +195,8 @@ ${task.task}
           success: true,
           task_id: task.id,
           status: "planned",
-          plan
+          plan,
+          provider: response.provider
         });
 
       } catch (error) {
@@ -212,7 +217,7 @@ ${task.task}
 
     // =========================================================
     // EXECUTE ONE STEP
-    // POST /step?task_id=17
+    // POST /step?task_id=18
     // =========================================================
 
     if (
@@ -275,7 +280,7 @@ ${task.task}
         .run();
 
       try {
-        const response = await callGemini(
+        const response = await callAI(
           env,
           `
 You are Hermes executing one step of an autonomous task.
@@ -288,7 +293,7 @@ ${step.action}
 
 Execute the step as helpfully as possible.
 
-If web research is useful, use Google Search.
+If web research is useful, use available web/search tools.
 
 Return a concise result containing:
 1. What you found or accomplished.
@@ -296,11 +301,14 @@ Return a concise result containing:
 3. Sources when web research was used.
 
 Do not pretend that an action was performed if you only generated instructions.
+
+Clearly distinguish:
+- facts
+- analysis
+- things you could not verify
           `,
           true
         );
-
-        const result = response.text;
 
         await env.DB.prepare(`
           UPDATE task_steps
@@ -308,7 +316,7 @@ Do not pretend that an action was performed if you only generated instructions.
               result = ?
           WHERE id = ?
         `)
-          .bind(result, step.id)
+          .bind(response.text, step.id)
           .run();
 
         return json({
@@ -317,7 +325,8 @@ Do not pretend that an action was performed if you only generated instructions.
           step_id: step.id,
           step_number: step.step_number,
           status: "completed",
-          result
+          provider: response.provider,
+          result: response.text
         });
 
       } catch (error) {
@@ -338,7 +347,6 @@ Do not pretend that an action was performed if you only generated instructions.
           )
           .run();
 
-        // Never leave the parent task stuck in "running"
         await env.DB.prepare(`
           UPDATE tasks
           SET status = ?
@@ -369,9 +377,7 @@ Do not pretend that an action was performed if you only generated instructions.
 
     // =========================================================
     // RUN TASK
-    // Executes ONE pending step per request
-    //
-    // POST /run-task?task_id=17
+    // POST /run-task?task_id=18
     // =========================================================
 
     if (
@@ -424,10 +430,6 @@ Do not pretend that an action was performed if you only generated instructions.
         step => step.status === "failed"
       );
 
-      // =======================================================
-      // FAILED TASK
-      // =======================================================
-
       if (failedSteps.length > 0) {
         await env.DB.prepare(
           "UPDATE tasks SET status = 'failed' WHERE id = ?"
@@ -442,10 +444,6 @@ Do not pretend that an action was performed if you only generated instructions.
           message: "Task contains failed steps"
         });
       }
-
-      // =======================================================
-      // ALL STEPS COMPLETED
-      // =======================================================
 
       if (pendingSteps.length === 0) {
         await env.DB.prepare(
@@ -462,10 +460,6 @@ Do not pretend that an action was performed if you only generated instructions.
         });
       }
 
-      // =======================================================
-      // EXECUTE ONLY THE NEXT STEP
-      // =======================================================
-
       const step = pendingSteps[0];
 
       const stepResponse = await executeStep(
@@ -477,10 +471,6 @@ Do not pretend that an action was performed if you only generated instructions.
       if (!stepResponse.success) {
         return json(stepResponse, 500);
       }
-
-      // =======================================================
-      // CHECK REMAINING STEPS
-      // =======================================================
 
       const remaining = await env.DB.prepare(`
         SELECT COUNT(*) AS count
@@ -507,7 +497,6 @@ Do not pretend that an action was performed if you only generated instructions.
         });
       }
 
-      // More steps remain
       await env.DB.prepare(
         "UPDATE tasks SET status = 'planned' WHERE id = ?"
       )
@@ -526,7 +515,7 @@ Do not pretend that an action was performed if you only generated instructions.
 
     // =========================================================
     // VIEW TASK STEPS
-    // GET /steps?task_id=17
+    // GET /steps?task_id=18
     // =========================================================
 
     if (
@@ -610,7 +599,64 @@ Do not pretend that an action was performed if you only generated instructions.
 
 
 // ===========================================================
-// GEMINI HELPER
+// AI ROUTER
+// ===========================================================
+
+async function callAI(
+  env,
+  prompt,
+  useSearch = false
+) {
+  // ---------------------------------------------------------
+  // PRIMARY: GEMINI
+  // ---------------------------------------------------------
+
+  try {
+    const response = await callGemini(
+      env,
+      prompt,
+      useSearch
+    );
+
+    return {
+      provider: "gemini",
+      text: response.text,
+      raw: response.raw
+    };
+
+  } catch (geminiError) {
+
+    // -------------------------------------------------------
+    // FALLBACK: OPENROUTER FREE
+    // -------------------------------------------------------
+
+    try {
+      const response = await callOpenRouter(
+        env,
+        prompt
+      );
+
+      return {
+        provider: "openrouter/free",
+        text: response.text,
+        raw: response.raw,
+        fallback_from: "gemini"
+      };
+
+    } catch (openRouterError) {
+
+      throw new Error(
+        `All free AI providers failed. ` +
+        `Gemini: ${geminiError.message} | ` +
+        `OpenRouter: ${openRouterError.message}`
+      );
+    }
+  }
+}
+
+
+// ===========================================================
+// GEMINI
 // ===========================================================
 
 async function callGemini(
@@ -673,6 +719,65 @@ async function callGemini(
 
 
 // ===========================================================
+// OPENROUTER FREE
+// ===========================================================
+
+async function callOpenRouter(
+  env,
+  prompt
+) {
+  if (!env.OPENROUTER_API_KEY) {
+    throw new Error(
+      "OPENROUTER_API_KEY is not configured"
+    );
+  }
+
+  const response = await fetch(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization":
+          `Bearer ${env.OPENROUTER_API_KEY}`,
+        "HTTP-Referer":
+          "https://hermes-business-agent.aashishatghaziabad.workers.dev",
+        "X-Title":
+          "Hermes Business Agent"
+      },
+      body: JSON.stringify({
+        model: "openrouter/free",
+        messages: [
+          {
+            role: "user",
+            content: prompt
+          }
+        ]
+      })
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      data?.error?.message ||
+      "OpenRouter API request failed"
+    );
+  }
+
+  const text =
+    data?.choices?.[0]?.message?.content ||
+    "OpenRouter returned no text.";
+
+  return {
+    text,
+    raw: data
+  };
+}
+
+
+// ===========================================================
 // STEP EXECUTOR
 // ===========================================================
 
@@ -691,7 +796,7 @@ async function executeStep(
     .run();
 
   try {
-    const response = await callGemini(
+    const response = await callAI(
       env,
       `
 You are Hermes executing one step of an autonomous task.
@@ -702,7 +807,8 @@ ${task.task}
 CURRENT STEP:
 ${step.action}
 
-Use Google Search when current or factual web information is required.
+Use available web/search capabilities when current or factual
+information is required.
 
 Execute the step as helpfully as possible.
 
@@ -730,11 +836,14 @@ Return a concise execution result.
       step_id: step.id,
       step_number: step.step_number,
       status: "completed",
+      provider: response.provider,
       result: response.text
     };
 
   } catch (error) {
-    const newAttempts = step.attempts + 1;
+    const newAttempts =
+      step.attempts + 1;
+
     const nextStatus =
       newAttempts < 3
         ? "pending"
@@ -753,7 +862,6 @@ Return a concise execution result.
       )
       .run();
 
-    // Reset parent task state too
     await env.DB.prepare(`
       UPDATE tasks
       SET status = ?
