@@ -900,9 +900,6 @@ async function searchWeb(
       ? result.results
       : [];
 
-  /*
-   * Remove duplicate URLs.
-   */
   const seenUrls =
     new Set();
 
@@ -926,12 +923,7 @@ async function searchWeb(
       return true;
     });
 
-
-  /*
-   * Add lightweight metadata so Hermes
-   * can understand the quality of each result.
-   */
- const enrichedResults =
+  const enrichedResults =
     uniqueResults.map((item, index) => {
 
       let domain = "";
@@ -943,6 +935,12 @@ async function searchWeb(
       } catch {
         domain = "";
       }
+
+      const qualityScore =
+        scoreSourceQuality(
+          item,
+          cleanQuery
+        );
 
       return {
         rank:
@@ -960,29 +958,45 @@ async function searchWeb(
         content:
           item.content || "",
 
-        score:
+        tavily_score:
           typeof item.score === "number"
             ? item.score
             : null,
 
         quality_score:
-          scoreSourceQuality(
-            item,
-            cleanQuery
-          )
+          qualityScore
       };
     });
-  enrichedResults.sort(
-  (a, b) =>
-    b.quality_score - a.quality_score
-);
 
-enrichedResults.forEach(
-  (item, index) => {
-    item.rank = index + 1;
-  }
-);
-// ===========================================================
+  enrichedResults.sort(
+    (a, b) =>
+      b.quality_score -
+      a.quality_score
+  );
+
+  enrichedResults.forEach(
+    (item, index) => {
+      item.rank = index + 1;
+    }
+  );
+
+  return {
+    success:
+      true,
+
+    tool:
+      "web_search",
+
+    query:
+      cleanQuery,
+
+    result_count:
+      enrichedResults.length,
+
+    results:
+      enrichedResults
+  };
+}// ===========================================================
 // HERMES AGENT
 // ===========================================================
 
