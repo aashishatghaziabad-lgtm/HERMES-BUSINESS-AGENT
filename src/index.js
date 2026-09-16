@@ -85,7 +85,7 @@ export default {
 
     // =========================================================
     // PLAN TASK
-    // POST /plan
+    // POST /plan?task_id=17
     // =========================================================
 
     if (
@@ -212,7 +212,7 @@ ${task.task}
 
     // =========================================================
     // EXECUTE ONE STEP
-    // POST /step?task_id=16
+    // POST /step?task_id=17
     // =========================================================
 
     if (
@@ -320,41 +320,58 @@ Do not pretend that an action was performed if you only generated instructions.
           result
         });
 
-      }  catch (error) {
-  const attempts = step.attempts + 1;
-  const nextStatus = attempts < 3 ? "pending" : "failed";
+      } catch (error) {
+        const attempts = step.attempts + 1;
+        const nextStatus =
+          attempts < 3 ? "pending" : "failed";
 
-  // Reset the step so it can retry later
-  await env.DB.prepare(`
-    UPDATE task_steps
-    SET status = ?,
-        result = ?
-    WHERE id = ?
-  `)
-    .bind(nextStatus, error.message, step.id)
-    .run();
+        await env.DB.prepare(`
+          UPDATE task_steps
+          SET status = ?,
+              result = ?
+          WHERE id = ?
+        `)
+          .bind(
+            nextStatus,
+            error.message,
+            step.id
+          )
+          .run();
 
-  // IMPORTANT: don't leave the whole task stuck in "running"
-  await env.DB.prepare(`
-    UPDATE tasks
-    SET status = ?
-    WHERE id = ?
-  `)
-    .bind(nextStatus === "pending" ? "planned" : "failed", task.id)
-    .run();
+        // Never leave the parent task stuck in "running"
+        await env.DB.prepare(`
+          UPDATE tasks
+          SET status = ?
+          WHERE id = ?
+        `)
+          .bind(
+            nextStatus === "pending"
+              ? "planned"
+              : "failed",
+            task.id
+          )
+          .run();
 
-  return json({
-    success: false,
-    task_id: task.id,
-    step_id: step.id,
-    status: nextStatus === "pending" ? "retrying" : "failed",
-    attempts,
-    error: error.message
-  }, 500);
-}
+        return json({
+          success: false,
+          task_id: task.id,
+          step_id: step.id,
+          step_number: step.step_number,
+          status:
+            nextStatus === "pending"
+              ? "retrying"
+              : "failed",
+          attempts,
+          error: error.message
+        }, 500);
+      }
+    }
+
     // =========================================================
-    // RUN ENTIRE TASK
-    // POST /run-task?task_id=16
+    // RUN TASK
+    // Executes ONE pending step per request
+    //
+    // POST /run-task?task_id=17
     // =========================================================
 
     if (
@@ -403,20 +420,34 @@ Do not pretend that an action was performed if you only generated instructions.
         step => step.status === "pending"
       );
 
+      const failedSteps = steps.results.filter(
+        step => step.status === "failed"
+      );
+
+      // =======================================================
+      // FAILED TASK
+      // =======================================================
+
+      if (failedSteps.length > 0) {
+        await env.DB.prepare(
+          "UPDATE tasks SET status = 'failed' WHERE id = ?"
+        )
+          .bind(task.id)
+          .run();
+
+        return json({
+          success: false,
+          task_id: task.id,
+          status: "failed",
+          message: "Task contains failed steps"
+        });
+      }
+
+      // =======================================================
+      // ALL STEPS COMPLETED
+      // =======================================================
+
       if (pendingSteps.length === 0) {
-        const failedSteps = steps.results.filter(
-          step => step.status === "failed"
-        );
-
-        if (failedSteps.length > 0) {
-          return json({
-            success: false,
-            task_id: task.id,
-            status: "failed",
-            message: "Task contains failed steps"
-          });
-        }
-
         await env.DB.prepare(
           "UPDATE tasks SET status = 'completed' WHERE id = ?"
         )
@@ -427,12 +458,14 @@ Do not pretend that an action was performed if you only generated instructions.
           success: true,
           task_id: task.id,
           status: "completed",
-          message: "All steps already completed"
+          message: "All steps already completed 🎉"
         });
       }
 
-      // Execute ONE step per request.
-      // This makes the system safer and easier to resume.
+      // =======================================================
+      // EXECUTE ONLY THE NEXT STEP
+      // =======================================================
+
       const step = pendingSteps[0];
 
       const stepResponse = await executeStep(
@@ -444,6 +477,10 @@ Do not pretend that an action was performed if you only generated instructions.
       if (!stepResponse.success) {
         return json(stepResponse, 500);
       }
+
+      // =======================================================
+      // CHECK REMAINING STEPS
+      // =======================================================
 
       const remaining = await env.DB.prepare(`
         SELECT COUNT(*) AS count
@@ -470,10 +507,17 @@ Do not pretend that an action was performed if you only generated instructions.
         });
       }
 
+      // More steps remain
+      await env.DB.prepare(
+        "UPDATE tasks SET status = 'planned' WHERE id = ?"
+      )
+        .bind(task.id)
+        .run();
+
       return json({
         success: true,
         task_id: task.id,
-        status: "running",
+        status: "planned",
         message: "Step completed. More steps remain.",
         completed_step: stepResponse,
         remaining_steps: Number(remaining.count)
@@ -482,7 +526,7 @@ Do not pretend that an action was performed if you only generated instructions.
 
     // =========================================================
     // VIEW TASK STEPS
-    // GET /steps?task_id=16
+    // GET /steps?task_id=17
     // =========================================================
 
     if (
@@ -569,7 +613,11 @@ Do not pretend that an action was performed if you only generated instructions.
 // GEMINI HELPER
 // ===========================================================
 
-async function callGemini(env, prompt, useSearch = false) {
+async function callGemini(
+  env,
+  prompt,
+  useSearch = false
+) {
   const body = {
     contents: [
       {
@@ -628,7 +676,11 @@ async function callGemini(env, prompt, useSearch = false) {
 // STEP EXECUTOR
 // ===========================================================
 
-async function executeStep(env, task, step) {
+async function executeStep(
+  env,
+  task,
+  step
+) {
   await env.DB.prepare(`
     UPDATE task_steps
     SET status = 'running',
@@ -683,6 +735,10 @@ Return a concise execution result.
 
   } catch (error) {
     const newAttempts = step.attempts + 1;
+    const nextStatus =
+      newAttempts < 3
+        ? "pending"
+        : "failed";
 
     await env.DB.prepare(`
       UPDATE task_steps
@@ -691,9 +747,23 @@ Return a concise execution result.
       WHERE id = ?
     `)
       .bind(
-        newAttempts < 3 ? "pending" : "failed",
+        nextStatus,
         error.message,
         step.id
+      )
+      .run();
+
+    // Reset parent task state too
+    await env.DB.prepare(`
+      UPDATE tasks
+      SET status = ?
+      WHERE id = ?
+    `)
+      .bind(
+        nextStatus === "pending"
+          ? "planned"
+          : "failed",
+        task.id
       )
       .run();
 
@@ -701,7 +771,10 @@ Return a concise execution result.
       success: false,
       step_id: step.id,
       step_number: step.step_number,
-      status: newAttempts < 3 ? "retrying" : "failed",
+      status:
+        nextStatus === "pending"
+          ? "retrying"
+          : "failed",
       attempts: newAttempts,
       error: error.message
     };
@@ -713,7 +786,10 @@ Return a concise execution result.
 // JSON RESPONSE HELPER
 // ===========================================================
 
-function json(data, status = 200) {
+function json(
+  data,
+  status = 200
+) {
   return new Response(
     JSON.stringify(data),
     {
