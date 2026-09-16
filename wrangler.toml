@@ -1,3 +1,8 @@
-name = "hermes-control"
+name = "hermes-business-agent"
 main = "src/index.js"
 compatibility_date = "2026-09-16"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "hermes-memory"
+database_id = "69350f21-c128-4d75-973e-e4941aed6a3c"
