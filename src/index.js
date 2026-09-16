@@ -719,7 +719,118 @@ ${task.task}
 // ===========================================================
 // WEB SEARCH
 // ===========================================================
+function scoreSourceQuality(result, query) {
 
+  const url =
+    String(result?.url || "").toLowerCase();
+
+  const title =
+    String(result?.title || "").toLowerCase();
+
+  const content =
+    String(result?.content || "").toLowerCase();
+
+  const text =
+    `${title} ${content} ${url}`;
+
+  let score = 0;
+
+
+  // Official / primary sources
+  if (
+    url.includes("amazon.com") ||
+    url.includes("sell.amazon.com") ||
+    url.includes("sellercentral.amazon")
+  ) {
+    score += 30;
+  }
+
+
+  // Strong community evidence
+  if (
+    url.includes("reddit.com")
+  ) {
+    score += 15;
+  }
+
+
+  // Established business / research sources
+  const qualityDomains = [
+    "forbes.com",
+    "reuters.com",
+    "economictimes.indiatimes.com",
+    "moneycontrol.com",
+    "business-standard.com",
+    "inc42.com",
+    "entrackr.com",
+    "yourstory.com",
+    "statista.com",
+    "ibef.org"
+  ];
+
+  for (const domain of qualityDomains) {
+
+    if (url.includes(domain)) {
+      score += 20;
+      break;
+    }
+  }
+
+
+  // Search relevance
+  const queryWords =
+    query
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(word => word.length >= 4);
+
+  let matches = 0;
+
+  for (const word of queryWords) {
+
+    if (text.includes(word)) {
+      matches++;
+    }
+  }
+
+  if (queryWords.length > 0) {
+
+    score += Math.min(
+      30,
+      Math.round(
+        (matches / queryWords.length) * 30
+      )
+    );
+  }
+
+
+  // Penalize obvious low-value pages
+  if (
+    url.includes("/watch") ||
+    url.includes("youtube.com") ||
+    url.includes("/channel/") ||
+    url.includes("/search") ||
+    url.includes("/tag/") ||
+    url.includes("/category/")
+  ) {
+    score -= 15;
+  }
+
+
+  // Reddit subreddit homepage is weak evidence
+  if (
+    url.includes("reddit.com/r/") &&
+    !url.includes("/comments/")
+  ) {
+    score -= 20;
+  }
+
+
+  return Math.max(
+    0,
+    Math.min(100, score)
+  );
+}
 async function searchWeb(
   env,
   query
